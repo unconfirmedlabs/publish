@@ -6,7 +6,7 @@ export type CommonOptions = {
   json: boolean
   quiet: boolean
   rpcUrl?: string
-  onaraUrl?: string
+  onaraUrl: string
   timeoutMs: number
 }
 
@@ -66,5 +66,4 @@ export type StatusReceipt = {
   packageId?: string
   immutable?: boolean
   onaraUrl: string
-  response?: unknown
 }

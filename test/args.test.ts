@@ -4,7 +4,7 @@ import { PublishError } from '../src/errors.js'
 
 describe('parseArgs', () => {
   test('parses the minimal testnet publish contract', () => {
-    expect(parseArgs(['.', '--network', 'testnet'])).toEqual({
+    expect(parseArgs(['.', '--network', 'testnet', '--onara-url', 'https://onara.example'])).toEqual({
       operation: 'publish',
       packagePath: '.',
       network: 'testnet',
@@ -15,6 +15,7 @@ describe('parseArgs', () => {
       json: false,
       quiet: false,
       timeoutMs: 70_000,
+      onaraUrl: 'https://onara.example',
     })
   })
 
@@ -44,23 +45,35 @@ describe('parseArgs', () => {
 
   test('parses status as a bounded read operation', () => {
     const digest = '4'.repeat(44)
-    expect(parseArgs(['status', digest, '--network', 'testnet', '--json'])).toEqual({
+    expect(
+      parseArgs([
+        'status',
+        digest,
+        '--network',
+        'testnet',
+        '--onara-url',
+        'https://onara.example',
+        '--json',
+      ]),
+    ).toEqual({
       operation: 'status',
       digest,
       network: 'testnet',
       json: true,
       quiet: false,
       timeoutMs: 70_000,
+      onaraUrl: 'https://onara.example',
     })
   })
 
   test.each([
     [[], '--network is required.'],
     [['--network', 'devnet'], '--network must be either'],
-    [['.', 'other', '--network', 'testnet'], 'at most one package path'],
-    [['--network', 'testnet', '--dry-run', '--yes'], '--yes is not used'],
-    [['status', 'x', '--network', 'testnet', '--rpc-url', 'https://rpc.example'], 'apply only'],
-    [['status', 'not-a-digest', '--network', 'testnet'], 'base58 Sui transaction digest'],
+    [['--network', 'testnet'], '--onara-url is required.'],
+    [['.', 'other', '--network', 'testnet', '--onara-url', 'https://onara.example'], 'at most one package path'],
+    [['--network', 'testnet', '--onara-url', 'https://onara.example', '--dry-run', '--yes'], '--yes is not used'],
+    [['status', 'x', '--network', 'testnet', '--onara-url', 'https://onara.example', '--rpc-url', 'https://rpc.example'], 'apply only'],
+    [['status', 'not-a-digest', '--network', 'testnet', '--onara-url', 'https://onara.example'], 'base58 Sui transaction digest'],
     [['--network', 'testnet', '--wat'], 'Unknown option'],
     [['--network', 'testnet', '--yes=false'], 'does not take a value'],
   ])('rejects invalid invocation %#', (argv, message) => {

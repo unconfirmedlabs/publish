@@ -7,8 +7,8 @@ export const VERSION = '0.1.0'
 export const HELP = `Publish a Sui Move package immutably with an ephemeral signer and Onara-sponsored gas.
 
 Usage:
-  publish [PACKAGE_PATH] --network <testnet|mainnet> [options]
-  publish status <TRANSACTION_DIGEST> --network <testnet|mainnet> [options]
+  publish [PACKAGE_PATH] --network <testnet|mainnet> --onara-url <url> [options]
+  publish status <TRANSACTION_DIGEST> --network <testnet|mainnet> --onara-url <url> [options]
 
 The publish operation runs the stock Sui compiler, publishes the resulting modules,
 and consumes the returned UpgradeCap with 0x2::package::make_immutable in one atomic
@@ -24,7 +24,7 @@ Publish options:
 
 Connection options:
   --rpc-url <url>       Override the selected network's Sui gRPC endpoint.
-  --onara-url <url>     Override the selected network's Onara endpoint.
+  --onara-url <url>     Required. Onara sponsorship service endpoint.
   --timeout-ms <ms>     Per-request client timeout (default: 70000).
 
 Output options:
@@ -154,6 +154,7 @@ function validateUrl(flag: string, value: string): string {
 export function parseArgs(argv: string[]): CliOptions {
   const flags = parseFlags(argv)
   if (!flags.network) usageError('--network is required.')
+  if (!flags.onaraUrl) usageError('--onara-url is required.')
 
   if (flags.positionals[0] === 'status') {
     if (flags.dryRun || flags.confirm || flags.suiBinary !== 'sui' || !flags.writePublished || flags.rpcUrl) {
@@ -172,7 +173,7 @@ export function parseArgs(argv: string[]): CliOptions {
       json: flags.json,
       quiet: flags.quiet,
       timeoutMs: flags.timeoutMs,
-      ...(flags.onaraUrl ? { onaraUrl: flags.onaraUrl } : {}),
+      onaraUrl: flags.onaraUrl,
     }
   }
 
@@ -191,6 +192,6 @@ export function parseArgs(argv: string[]): CliOptions {
     quiet: flags.quiet,
     timeoutMs: flags.timeoutMs,
     ...(flags.rpcUrl ? { rpcUrl: flags.rpcUrl } : {}),
-    ...(flags.onaraUrl ? { onaraUrl: flags.onaraUrl } : {}),
+    onaraUrl: flags.onaraUrl,
   }
 }

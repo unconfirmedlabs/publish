@@ -27,11 +27,20 @@ function packageDigest(digest: number[]): string {
   return `0x${Buffer.from(digest).toString('hex')}`
 }
 
-function recoveryCommand(digest: string, network: string): string {
-  return `publish status ${digest} --network ${network} --json`
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`
 }
 
-function mapSponsorshipError(error: unknown, digest: string, network: string): PublishError {
+function recoveryCommand(digest: string, network: string, onaraUrl: string): string {
+  return `publish status ${digest} --network ${network} --onara-url ${shellQuote(onaraUrl)} --json`
+}
+
+function mapSponsorshipError(
+  error: unknown,
+  digest: string,
+  network: string,
+  onaraUrl: string,
+): PublishError {
   if (error instanceof OnaraHttpError) {
     const onaraError = error
     if (onaraError.txStatus === 'unconfirmed' && onaraError.digest) {
@@ -39,7 +48,7 @@ function mapSponsorshipError(error: unknown, digest: string, network: string): P
         exitCode: 3,
         effect: 'unknown',
         digest: onaraError.digest,
-        recovery: recoveryCommand(onaraError.digest, network),
+        recovery: recoveryCommand(onaraError.digest, network, onaraUrl),
         cause: onaraError,
       })
     }
@@ -49,7 +58,7 @@ function mapSponsorshipError(error: unknown, digest: string, network: string): P
         exitCode: 3,
         effect: 'unknown',
         digest: knownDigest,
-        recovery: recoveryCommand(knownDigest, network),
+        recovery: recoveryCommand(knownDigest, network, onaraUrl),
         cause: onaraError,
       })
     }
@@ -67,7 +76,7 @@ function mapSponsorshipError(error: unknown, digest: string, network: string): P
       exitCode: 3,
       effect: 'unknown',
       digest,
-      recovery: recoveryCommand(digest, network),
+      recovery: recoveryCommand(digest, network, onaraUrl),
       cause: error,
     },
   )
@@ -124,7 +133,7 @@ export async function publishPackage(options: {
 
   const config = resolveNetworkConfig(options.cli.network, {
     ...(options.cli.rpcUrl ? { rpcUrl: options.cli.rpcUrl } : {}),
-    ...(options.cli.onaraUrl ? { onaraUrl: options.cli.onaraUrl } : {}),
+    onaraUrl: options.cli.onaraUrl,
   })
   const client = new SuiGrpcClient({ network: config.network, baseUrl: config.rpcUrl })
   const onara = new OnaraHttpClient({
@@ -181,7 +190,7 @@ export async function publishPackage(options: {
       waitForExecution: true,
     })
   } catch (error) {
-    throw mapSponsorshipError(error, digest, config.network)
+    throw mapSponsorshipError(error, digest, config.network, config.onaraUrl)
   }
 
   const common = {
@@ -221,7 +230,7 @@ export async function publishPackage(options: {
       effect: 'unknown',
       exitCode: 3,
       digest,
-      recovery: recoveryCommand(digest, config.network),
+      recovery: recoveryCommand(digest, config.network, config.onaraUrl),
     })
   }
 
@@ -237,7 +246,7 @@ export async function publishPackage(options: {
       effect: 'unknown',
       exitCode: 3,
       digest,
-      recovery: recoveryCommand(digest, config.network),
+      recovery: recoveryCommand(digest, config.network, config.onaraUrl),
     })
   }
 
@@ -281,7 +290,7 @@ export async function publishPackage(options: {
 export async function transactionStatus(options: StatusOptions): Promise<StatusReceipt> {
   const config = resolveNetworkConfig(options.network, {
     ...(options.rpcUrl ? { rpcUrl: options.rpcUrl } : {}),
-    ...(options.onaraUrl ? { onaraUrl: options.onaraUrl } : {}),
+    onaraUrl: options.onaraUrl,
   })
   const onara = new OnaraHttpClient({ url: config.onaraUrl, fetch: boundedFetch(options.timeoutMs) })
   let response
@@ -326,6 +335,5 @@ export async function transactionStatus(options: StatusOptions): Promise<StatusR
     outcome: execution.kind,
     ...(execution.packageId ? { packageId: execution.packageId } : {}),
     onaraUrl: config.onaraUrl,
-    response,
   }
 }

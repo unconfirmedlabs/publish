@@ -4,11 +4,11 @@ Publish an immutable Sui Move package with a fresh in-memory signer and
 [Onara](https://github.com/unconfirmedlabs/onara)-sponsored gas.
 
 ```sh
-publish . --network testnet --dry-run
-publish . --network testnet
+publish . --network testnet --onara-url <URL> --dry-run
+publish . --network testnet --onara-url <URL>
 
-publish . --network mainnet --dry-run
-publish . --network mainnet --yes
+publish . --network mainnet --onara-url <URL> --dry-run
+publish . --network mainnet --onara-url <URL> --yes
 ```
 
 Every successful publish is one atomic programmable transaction:
@@ -74,16 +74,17 @@ The package name is `@unconfirmed/publish` and the installed executable is
 
 ## Networks
 
-`--network` is always required. There is no ambient default.
+`--network` and `--onara-url` are always required. There are no ambient
+defaults for either one; callers bring their own Onara deployment.
 
-| Network | Sui gRPC | Onara |
-| --- | --- | --- |
-| testnet | `https://fullnode.testnet.sui.io:443` | `http://onara-testnet.flycast` |
-| mainnet | `https://fullnode.mainnet.sui.io:443` | `http://onara-mainnet.flycast` |
+| Network | Default Sui gRPC |
+| --- | --- |
+| testnet | `https://fullnode.testnet.sui.io:443` |
+| mainnet | `https://fullnode.mainnet.sui.io:443` |
 
 The CLI verifies both endpoints' immutable chain identifiers before generating
-the signer. Override private or mirrored infrastructure explicitly with
-`--rpc-url` and `--onara-url`; the network identity checks still apply.
+the signer. Override private or mirrored Sui infrastructure explicitly with
+`--rpc-url`; the network identity checks still apply.
 
 The resolved Onara and RPC URLs are included in every JSON publish receipt.
 
@@ -96,7 +97,7 @@ and `/sponsor/:digest/status`), so it runs consistently under both Node and Bun.
 ## Dry runs
 
 ```sh
-publish ./move/my-package --network testnet --dry-run --json
+publish ./move/my-package --network testnet --onara-url <URL> --dry-run --json
 ```
 
 A dry run compiles the package, constructs the full transaction, lets the Sui
@@ -115,7 +116,7 @@ and can be disabled with `--quiet`. Before a result is available, stdout stays
 empty on failure.
 
 ```sh
-publish . --network testnet --dry-run --json --quiet
+publish . --network testnet --onara-url <URL> --dry-run --json --quiet
 ```
 
 ```json
@@ -132,7 +133,7 @@ publish . --network testnet --dry-run --json --quiet
   "sender": "0x...",
   "sponsor": "0x...",
   "immutable": true,
-  "onaraUrl": "http://onara-testnet.flycast",
+  "onaraUrl": "<URL>",
   "rpcUrl": "https://fullnode.testnet.sui.io:443",
   "suiCliVersion": "sui 1.78.1-...",
   "policy": "allow-all"
@@ -170,7 +171,7 @@ a committed transaction, and retrying with a fresh key would create another
 package. The locally derived transaction digest is returned whenever possible.
 
 ```sh
-publish status <TRANSACTION_DIGEST> --network testnet --json
+publish status <TRANSACTION_DIGEST> --network testnet --onara-url <URL> --json
 ```
 
 ## Important package constraints

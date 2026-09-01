@@ -33,6 +33,10 @@ build-config = { flavor = "sui", edition = ${JSON.stringify(options.edition)} }
 `
 }
 
+function oneTrailingNewline(value: string): string {
+  return `${value.trimEnd()}\n`
+}
+
 export function updatePublishedText(
   existing: string,
   options: {
@@ -48,7 +52,7 @@ export function updatePublishedText(
   const match = sectionPattern.exec(existing)
   if (!match) {
     const prefix = existing.trim() ? `${existing.trimEnd()}\n\n` : `${HEADER}\n`
-    return `${prefix}${replacement}`
+    return oneTrailingNewline(`${prefix}${replacement}`)
   }
 
   const start = match.index
@@ -57,7 +61,7 @@ export function updatePublishedText(
   const end = nextHeader ? afterHeader + nextHeader.index : existing.length
   const before = existing.slice(0, start)
   const after = existing.slice(end).replace(/^\s*/, '\n\n')
-  return `${before}${replacement.trimEnd()}${after || '\n'}`
+  return oneTrailingNewline(`${before}${replacement.trimEnd()}${after || '\n'}`)
 }
 
 export async function updatePublishedFile(options: {

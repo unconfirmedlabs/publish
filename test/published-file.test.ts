@@ -17,6 +17,8 @@ describe('updatePublishedText', () => {
     expect(value).toContain('original-id = "0xabc"')
     expect(value).toContain('toolchain-version = "1.78.1"')
     expect(value).not.toContain('upgrade-capability')
+    expect(value.endsWith('\n')).toBe(true)
+    expect(value.endsWith('\n\n')).toBe(false)
   })
 
   test('replaces one network while preserving comments and the other network', () => {
@@ -41,5 +43,7 @@ upgrade-capability = "0x3"
     expect(value).toContain('chain-id = "test-chain"')
     expect(value).not.toContain('upgrade-capability')
     expect(value.match(/\[published\.testnet\]/g)).toHaveLength(1)
+    expect(value.endsWith('\n')).toBe(true)
+    expect(value.endsWith('\n\n')).toBe(false)
   })
 })

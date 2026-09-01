@@ -126,7 +126,7 @@ async function main(): Promise<number> {
       const configModule = await import('./config.js')
       const config = configModule.resolveNetworkConfig(options.network, {
         ...(options.rpcUrl ? { rpcUrl: options.rpcUrl } : {}),
-        ...(options.onaraUrl ? { onaraUrl: options.onaraUrl } : {}),
+        onaraUrl: options.onaraUrl,
       })
       progress(options.json, options.quiet, 'build', `Building ${options.packagePath} for ${options.network}...`)
       const build = await buildMovePackage({
