@@ -1,21 +1,19 @@
 import { SuiGrpcClient } from '@mysten/sui/grpc'
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
-import { Transaction } from '@mysten/sui/transactions'
 import { toBase64 } from '@mysten/sui/utils'
 import { resolveNetworkConfig } from './config.js'
 import { PublishError } from './errors.js'
 import { OnaraHttpClient, OnaraHttpError } from './onara-client.js'
-import { updatePublishedFile } from './published-file.js'
 import { extractExecutionResult } from './result.js'
+import { createImmutablePublishTransaction } from './transaction.js'
 import type {
-  MoveBuildArtifact,
-  PublishOptions,
+  PublishPackageOptions,
   PublishReceipt,
   StatusOptions,
   StatusReceipt,
 } from './types.js'
 
-function boundedFetch(timeoutMs: number): typeof fetch {
+export function createBoundedFetch(timeoutMs: number): typeof fetch {
   return (async (input, init) => {
     const signals = [AbortSignal.timeout(timeoutMs)]
     if (init?.signal) signals.push(init.signal)
@@ -23,23 +21,13 @@ function boundedFetch(timeoutMs: number): typeof fetch {
   }) as typeof fetch
 }
 
-function packageDigest(digest: number[]): string {
+export function packageDigestHex(digest: number[]): string {
   return `0x${Buffer.from(digest).toString('hex')}`
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`
-}
-
-function recoveryCommand(digest: string, network: string, onaraUrl: string): string {
-  return `publish status ${digest} --network ${network} --onara-url ${shellQuote(onaraUrl)} --json`
-}
-
-function mapSponsorshipError(
+export function sponsorshipError(
   error: unknown,
   digest: string,
-  network: string,
-  onaraUrl: string,
 ): PublishError {
   if (error instanceof OnaraHttpError) {
     const onaraError = error
@@ -48,7 +36,6 @@ function mapSponsorshipError(
         exitCode: 3,
         effect: 'unknown',
         digest: onaraError.digest,
-        recovery: recoveryCommand(onaraError.digest, network, onaraUrl),
         cause: onaraError,
       })
     }
@@ -58,7 +45,6 @@ function mapSponsorshipError(
         exitCode: 3,
         effect: 'unknown',
         digest: knownDigest,
-        recovery: recoveryCommand(knownDigest, network, onaraUrl),
         cause: onaraError,
       })
     }
@@ -76,13 +62,12 @@ function mapSponsorshipError(
       exitCode: 3,
       effect: 'unknown',
       digest,
-      recovery: recoveryCommand(digest, network, onaraUrl),
       cause: error,
     },
   )
 }
 
-async function assertNetworkIdentity(options: {
+export async function assertNetworkIdentity(options: {
   client: SuiGrpcClient
   onara: OnaraHttpClient
   network: string
@@ -116,29 +101,15 @@ async function assertNetworkIdentity(options: {
   return { sponsor: status.address }
 }
 
-export async function publishPackage(options: {
-  cli: PublishOptions
-  packagePath: string
-  artifact: MoveBuildArtifact
-  suiCliVersion: string
-  signal?: AbortSignal
-}): Promise<PublishReceipt> {
-  if (options.cli.network === 'mainnet' && !options.cli.dryRun && !options.cli.confirm) {
-    throw new PublishError(
-      'CONFIRMATION_REQUIRED',
-      'Mainnet publishing is permanent. Re-run with --yes after reviewing a --dry-run.',
-      { exitCode: 2 },
-    )
-  }
-
-  const config = resolveNetworkConfig(options.cli.network, {
-    ...(options.cli.rpcUrl ? { rpcUrl: options.cli.rpcUrl } : {}),
-    onaraUrl: options.cli.onaraUrl,
+export async function publishPackage(options: PublishPackageOptions): Promise<PublishReceipt> {
+  const config = resolveNetworkConfig(options.network, {
+    ...(options.rpcUrl ? { rpcUrl: options.rpcUrl } : {}),
+    onaraUrl: options.onaraUrl,
   })
   const client = new SuiGrpcClient({ network: config.network, baseUrl: config.rpcUrl })
   const onara = new OnaraHttpClient({
     url: config.onaraUrl,
-    fetch: boundedFetch(options.cli.timeoutMs),
+    fetch: createBoundedFetch(options.timeoutMs),
   })
   const { sponsor } = await assertNetworkIdentity({
     client,
@@ -154,15 +125,7 @@ export async function publishPackage(options: {
     throw new PublishError('INVALID_SPONSOR', 'Ephemeral sender unexpectedly equals the sponsor address.')
   }
 
-  const transaction = new Transaction()
-  const upgradeCap = transaction.publish({
-    modules: options.artifact.modules,
-    dependencies: options.artifact.dependencies,
-  })[0]!
-  transaction.moveCall({
-    target: '0x2::package::make_immutable',
-    arguments: [upgradeCap],
-  })
+  const transaction = createImmutablePublishTransaction([options.artifact])
   transaction.setSender(sender)
   transaction.setGasOwner(sponsor)
   transaction.setGasPayment([])
@@ -186,11 +149,11 @@ export async function publishPackage(options: {
       sender,
       txBytes: toBase64(bytes),
       txSignature: signature,
-      dryRun: options.cli.dryRun,
+      dryRun: options.dryRun,
       waitForExecution: true,
     })
   } catch (error) {
-    throw mapSponsorshipError(error, digest, config.network, config.onaraUrl)
+    throw sponsorshipError(error, digest)
   }
 
   const common = {
@@ -198,7 +161,7 @@ export async function publishPackage(options: {
     operation: 'publish' as const,
     network: config.network,
     packagePath: options.packagePath,
-    packageDigest: packageDigest(options.artifact.digest),
+    packageDigest: packageDigestHex(options.artifact.digest),
     moduleCount: options.artifact.modules.length,
     dependencyCount: options.artifact.dependencies.length,
     sender,
@@ -212,7 +175,7 @@ export async function publishPackage(options: {
   const responseRecord =
     typeof response === 'object' && response !== null ? (response as Record<string, unknown>) : undefined
   if (responseRecord?.dryRun === true) {
-    if (!options.cli.dryRun) {
+    if (!options.dryRun) {
       throw new PublishError('ONARA_DRY_RUN_ONLY', 'Onara validated the transaction but did not execute it.', {
         effect: 'not_applied',
       })
@@ -225,12 +188,11 @@ export async function publishPackage(options: {
     }
   }
 
-  if (options.cli.dryRun) {
+  if (options.dryRun) {
     throw new PublishError('INVALID_ONARA_RESPONSE', 'Onara returned an executable result for a dry run.', {
       effect: 'unknown',
       exitCode: 3,
       digest,
-      recovery: recoveryCommand(digest, config.network, config.onaraUrl),
     })
   }
 
@@ -246,7 +208,6 @@ export async function publishPackage(options: {
       effect: 'unknown',
       exitCode: 3,
       digest,
-      recovery: recoveryCommand(digest, config.network, config.onaraUrl),
     })
   }
 
@@ -254,35 +215,12 @@ export async function publishPackage(options: {
   if (!execution.packageId) {
     warnings.push('Transaction succeeded, but the package ID was not present in returned effects; use the status command to reconcile.')
   }
-  let publishedFile: string | undefined
-  let publishedFileUpdated: boolean | undefined
-  if (options.cli.writePublished && execution.packageId) {
-    try {
-      publishedFile = await updatePublishedFile({
-        packagePath: options.packagePath,
-        network: config.network,
-        chainId: config.chainId,
-        packageId: execution.packageId,
-        suiCliVersion: options.suiCliVersion,
-      })
-      publishedFileUpdated = true
-    } catch (error) {
-      publishedFileUpdated = false
-      warnings.push(
-        `Package was published, but Published.toml was not updated: ${error instanceof Error ? error.message : 'unknown error'}`,
-      )
-    }
-  } else if (!options.cli.writePublished) {
-    publishedFileUpdated = false
-  }
   return {
     ...common,
     outcome: 'published',
     effect: 'applied',
     transactionDigest: execution.digest ?? digest,
     ...(execution.packageId ? { packageId: execution.packageId } : {}),
-    ...(publishedFile ? { publishedFile } : {}),
-    ...(publishedFileUpdated === undefined ? {} : { publishedFileUpdated }),
     ...(warnings.length ? { warnings } : {}),
   }
 }
@@ -292,7 +230,7 @@ export async function transactionStatus(options: StatusOptions): Promise<StatusR
     ...(options.rpcUrl ? { rpcUrl: options.rpcUrl } : {}),
     onaraUrl: options.onaraUrl,
   })
-  const onara = new OnaraHttpClient({ url: config.onaraUrl, fetch: boundedFetch(options.timeoutMs) })
+  const onara = new OnaraHttpClient({ url: config.onaraUrl, fetch: createBoundedFetch(options.timeoutMs) })
   let response
   let status
   try {

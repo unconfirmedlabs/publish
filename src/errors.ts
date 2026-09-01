@@ -6,7 +6,6 @@ export class PublishError extends Error {
   readonly effect: MutationEffect
   readonly details: string | undefined
   readonly digest: string | undefined
-  readonly recovery: string | undefined
 
   constructor(
     code: string,
@@ -16,7 +15,6 @@ export class PublishError extends Error {
       effect?: MutationEffect
       details?: string
       digest?: string
-      recovery?: string
       cause?: unknown
     } = {},
   ) {
@@ -27,7 +25,6 @@ export class PublishError extends Error {
     this.effect = options.effect ?? 'not_applied'
     this.details = options.details
     this.digest = options.digest
-    this.recovery = options.recovery
   }
 }
 

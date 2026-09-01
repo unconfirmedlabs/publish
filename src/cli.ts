@@ -3,6 +3,7 @@
 import { HELP, VERSION, parseArgs } from './args.js'
 import { errorFromUnknown, type PublishError } from './errors.js'
 import type { PublishReceipt, StatusReceipt } from './types.js'
+import type { CliOptions } from './cli-types.js'
 
 function write(stream: NodeJS.WriteStream, value: string): void {
   stream.write(value.endsWith('\n') ? value : `${value}\n`)
@@ -50,7 +51,16 @@ function renderReceipt(receipt: PublishReceipt | StatusReceipt, json: boolean): 
   for (const warning of receipt.warnings ?? []) write(process.stderr, `warning: ${warning}`)
 }
 
-function renderError(error: PublishError, json: boolean): void {
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`
+}
+
+function recoveryCommand(error: PublishError, options: CliOptions | undefined): string | undefined {
+  if (error.effect !== 'unknown' || !error.digest || !options) return undefined
+  return `publish status ${error.digest} --network ${options.network} --onara-url ${shellQuote(options.onaraUrl)} --json`
+}
+
+function renderError(error: PublishError, json: boolean, recovery?: string): void {
   if (json) {
     write(
       process.stderr,
@@ -61,7 +71,7 @@ function renderError(error: PublishError, json: boolean): void {
           message: error.message,
           effect: error.effect,
           ...(error.digest ? { digest: error.digest } : {}),
-          ...(error.recovery ? { recovery: error.recovery } : {}),
+          ...(recovery ? { recovery } : {}),
           ...(error.details ? { details: error.details } : {}),
         },
       }),
@@ -72,7 +82,7 @@ function renderError(error: PublishError, json: boolean): void {
   write(process.stderr, `effect: ${error.effect}`)
   if (error.digest) write(process.stderr, `transaction: ${error.digest}`)
   if (error.details) write(process.stderr, error.details)
-  if (error.recovery) write(process.stderr, `recovery: ${error.recovery}`)
+  if (recovery) write(process.stderr, `recovery: ${recovery}`)
 }
 
 async function main(): Promise<number> {
@@ -89,8 +99,10 @@ async function main(): Promise<number> {
   }
 
   let json = optionTokens.includes('--json')
+  let parsedOptions: CliOptions | undefined
   try {
     const options = parseArgs(argv)
+    parsedOptions = options
     json = options.json
     const abort = new AbortController()
     const interrupt = () => abort.abort(new Error('Interrupted.'))
@@ -144,12 +156,39 @@ async function main(): Promise<number> {
         options.dryRun ? 'Validating sponsorship policy...' : 'Submitting sponsored transaction...',
       )
       const receipt = await publishPackage({
-        cli: options,
+        network: options.network,
+        ...(options.rpcUrl ? { rpcUrl: options.rpcUrl } : {}),
+        onaraUrl: options.onaraUrl,
+        timeoutMs: options.timeoutMs,
+        dryRun: options.dryRun,
         packagePath: build.packagePath,
         artifact: build.artifact,
         suiCliVersion: build.suiCliVersion,
         signal: abort.signal,
       })
+      if (receipt.outcome === 'published') {
+        if (options.writePublished && receipt.packageId) {
+          try {
+            const { updatePublishedFile } = await import('./published-file.js')
+            receipt.publishedFile = await updatePublishedFile({
+              packagePath: build.packagePath,
+              network: options.network,
+              chainId: config.chainId,
+              packageId: receipt.packageId,
+              suiCliVersion: build.suiCliVersion,
+            })
+            receipt.publishedFileUpdated = true
+          } catch (error) {
+            receipt.publishedFileUpdated = false
+            receipt.warnings = [
+              ...(receipt.warnings ?? []),
+              `Package was published, but Published.toml was not updated: ${error instanceof Error ? error.message : 'unknown error'}`,
+            ]
+          }
+        } else if (!options.writePublished) {
+          receipt.publishedFileUpdated = false
+        }
+      }
       renderReceipt(receipt, options.json)
       return 0
     } finally {
@@ -158,7 +197,7 @@ async function main(): Promise<number> {
     }
   } catch (caught) {
     const error = errorFromUnknown(caught)
-    renderError(error, json)
+    renderError(error, json, recoveryCommand(error, parsedOptions))
     return error.exitCode
   }
 }

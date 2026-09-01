@@ -1,6 +1,7 @@
 # publish
 
-Publish an immutable Sui Move package with a fresh in-memory signer and
+An SDK for composing immutable Sui Move package publishes, plus a thin CLI that
+publishes one package with a fresh in-memory signer and
 [Onara](https://github.com/unconfirmedlabs/onara)-sponsored gas.
 
 ```sh
@@ -21,6 +22,48 @@ Publish(modules, dependencies) -> UpgradeCap
 If either command fails, neither takes effect. The Ed25519 key is generated only
 after compilation, kept in process memory, used to sign that transaction, and
 never printed or written to disk. Onara pays gas from its address balance.
+
+## SDK
+
+`@unconfirmed/publish` exposes transaction composition separately from build,
+signing, gas selection, execution, and deployment metadata:
+
+```ts
+import { Transaction } from '@mysten/sui/transactions'
+import { addImmutablePublish } from '@unconfirmed/publish'
+
+const transaction = new Transaction()
+addImmutablePublish(transaction, artifact)
+
+// The caller chooses the sender, gas strategy, signer, and executor.
+```
+
+For independent package batches, `createImmutablePublishTransaction(artifacts)`
+creates the complete PTB. It accepts one through five artifacts, matching Sui's
+publish-command limit, and adds one `make_immutable` call immediately after each
+publish. Neither transaction helper sets sender or gas data.
+
+The root export also provides:
+
+- `buildMovePackage` and `parseBuildOutput` for argv-safe stock Sui builds;
+- `OnaraHttpClient` and `createBoundedFetch` for sponsored execution;
+- `extractExecutionResult` and `extractPublishedPackageIds` for execution-effect
+  normalization, including all package IDs from a batch;
+- `transactionStatus` and `sponsorshipError` for digest-based reconciliation;
+- `updatePublishedFile` and `updatePublishedText` for explicit, atomic deployment
+  metadata updates; and
+- `publishPackage` as the one-package ephemeral-signer convenience workflow used
+  by the CLI.
+
+The core publishing options contain network and execution inputs only. CLI
+presentation, confirmation, and metadata-write switches are intentionally not
+part of the SDK contract. `Published.toml` is never changed by transaction
+composition or effect parsing; callers invoke the metadata helper explicitly
+after an applied publish.
+
+Mutation receipts and errors use `effect: "applied" | "not_applied" |
+"unknown"`. An unknown outcome carries the locally derived digest whenever one
+is available and must be reconciled before retrying.
 
 ## Why the CLI builds the package
 

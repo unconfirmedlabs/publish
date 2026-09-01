@@ -1,35 +1,32 @@
 import type { Network } from './config.js'
 import type { MutationEffect } from './errors.js'
 
-export type CommonOptions = {
+export type PublishConnectionOptions = {
   network: Network
-  json: boolean
-  quiet: boolean
   rpcUrl?: string
   onaraUrl: string
   timeoutMs: number
 }
 
-export type PublishOptions = CommonOptions & {
-  operation: 'publish'
-  packagePath: string
+export type PublishOptions = PublishConnectionOptions & {
   dryRun: boolean
-  confirm: boolean
-  suiBinary: string
-  writePublished: boolean
 }
 
-export type StatusOptions = CommonOptions & {
-  operation: 'status'
+export type StatusOptions = PublishConnectionOptions & {
   digest: string
 }
-
-export type CliOptions = PublishOptions | StatusOptions
 
 export type MoveBuildArtifact = {
   modules: string[]
   dependencies: string[]
   digest: number[]
+}
+
+export type PublishPackageOptions = PublishOptions & {
+  packagePath: string
+  artifact: MoveBuildArtifact
+  suiCliVersion: string
+  signal?: AbortSignal
 }
 
 export type PublishReceipt = {

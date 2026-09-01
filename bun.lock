@@ -4,13 +4,14 @@
   "workspaces": {
     "": {
       "name": "@unconfirmed/publish",
-      "dependencies": {
-        "@mysten/sui": "2.27.1",
-      },
       "devDependencies": {
+        "@mysten/sui": "2.28.0",
         "@types/bun": "1.4.0",
         "@types/node": "24.13.3",
         "typescript": "5.9.3",
+      },
+      "peerDependencies": {
+        "@mysten/sui": "2.28.0",
       },
     },
   },
@@ -27,7 +28,7 @@
 
     "@mysten/bcs": ["@mysten/bcs@2.1.1", "", { "dependencies": { "@mysten/utils": "^0.4.1", "@scure/base": "^2.3.0" } }, "sha512-IDYomoQ6+yvOIClBHmNdScttv+h/HbGGHLEdUmGQptR3YdqqLM5vJD28wf2QP/UXCEBkCoG7TOT6pFNw8ExYmA=="],
 
-    "@mysten/sui": ["@mysten/sui@2.27.1", "", { "dependencies": { "@graphql-typed-document-node/core": "^3.2.0", "@mysten/bcs": "^2.1.1", "@mysten/utils": "^0.4.1", "@noble/curves": "^2.3.0", "@noble/hashes": "^2.3.0", "@protobuf-ts/grpcweb-transport": "^2.11.1", "@protobuf-ts/runtime": "^2.11.1", "@protobuf-ts/runtime-rpc": "^2.11.1", "@scure/base": "^2.3.0", "@scure/bip32": "^2.3.0", "@scure/bip39": "^2.3.0", "gql.tada": "^1.11.3", "graphql": "^17.0.2", "poseidon-lite": "0.3.0", "valibot": "^1.4.2" } }, "sha512-GYvDGxEq5jU6FBRtM5F1FOWxLr/Ell/1J3ta4UwyI8bKiI9jDv007j6Ozhun4+Qt1LXRHmgOeNUDQsAASxrw3Q=="],
+    "@mysten/sui": ["@mysten/sui@2.28.0", "", { "dependencies": { "@graphql-typed-document-node/core": "^3.2.0", "@mysten/bcs": "^2.1.1", "@mysten/utils": "^0.4.1", "@noble/curves": "^2.3.0", "@noble/hashes": "^2.3.0", "@protobuf-ts/grpcweb-transport": "^2.11.1", "@protobuf-ts/runtime": "^2.11.1", "@protobuf-ts/runtime-rpc": "^2.11.1", "@scure/base": "^2.3.0", "@scure/bip32": "^2.3.0", "@scure/bip39": "^2.3.0", "gql.tada": "^1.11.3", "graphql": "^17.0.2", "poseidon-lite": "0.3.0", "valibot": "^1.4.2" } }, "sha512-2GUUtEpdoUeyzq7OAlvcaSqv05wcA+Ppgx7PVzSL01KFF9iS3AEO0//zrWAJ1uxsVikcwFlP6fY1rUCKMsnwbw=="],
 
     "@mysten/utils": ["@mysten/utils@0.4.1", "", { "dependencies": { "@scure/base": "^2.3.0" } }, "sha512-gffLJ84CbqG/CcOPuVlwXIRu37tFn0BtUx7CQtbLwJzWjUE7FU2Gq8BXWjzxImnvufcyLTaNWtCPG6wq22Zhog=="],
 

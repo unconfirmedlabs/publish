@@ -19,8 +19,10 @@ describe('extractExecutionResult', () => {
       }),
     ).toEqual({
       kind: 'success',
+      effect: 'applied',
       digest: 'tx',
       packageId: `0x${'0'.repeat(61)}123`,
+      packageIds: [`0x${'0'.repeat(61)}123`],
     })
   })
 
@@ -33,10 +35,32 @@ describe('extractExecutionResult', () => {
           status: { success: false, error: { message: 'Move abort' } },
         },
       }),
-    ).toEqual({ kind: 'failed', digest: 'failed-tx', error: 'Move abort' })
+    ).toEqual({ kind: 'failed', effect: 'applied', digest: 'failed-tx', error: 'Move abort' })
   })
 
   test('does not invent status for unknown responses', () => {
-    expect(extractExecutionResult({ ok: true })).toEqual({ kind: 'unknown' })
+    expect(extractExecutionResult({ ok: true })).toEqual({ kind: 'unknown', effect: 'unknown' })
+  })
+
+  test('extracts every package ID from a batched immutable publish', () => {
+    const result = extractExecutionResult({
+      $kind: 'Transaction',
+      Transaction: {
+        digest: 'tx',
+        status: { success: true },
+        effects: {
+          changedObjects: [
+            { objectId: '0xa', outputState: 'PackageWrite', idOperation: 'Created' },
+            { objectId: '0xb', outputState: 'PackageWrite', idOperation: 'Created' },
+          ],
+        },
+      },
+    })
+
+    expect(result.packageIds).toEqual([
+      `0x${'0'.repeat(63)}a`,
+      `0x${'0'.repeat(63)}b`,
+    ])
+    expect(result.packageId).toBe(`0x${'0'.repeat(63)}a`)
   })
 })

@@ -1,7 +1,7 @@
 {
   "name": "@unconfirmed/publish",
   "version": "0.1.0",
-  "description": "Publish immutable Sui Move packages with ephemeral signers and Onara gas sponsorship.",
+  "description": "Compose and publish immutable Sui Move packages, with an Onara-sponsored CLI.",
   "license": "MIT",
   "type": "module",
   "bin": {
@@ -20,9 +20,9 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json && chmod +x dist/cli.js",
-    "check": "tsc --noEmit && bun test",
-    "test": "bun test",
-    "prepublishOnly": "bun run check && bun run build"
+    "check": "tsc --noEmit && bun run build && bun test",
+    "test": "bun run build && bun test",
+    "prepublishOnly": "bun run check"
   },
   "repository": {
     "type": "git",
@@ -43,11 +43,15 @@
   "engines": {
     "node": ">=22"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "packageManager": "bun@1.4.0",
-  "dependencies": {
-    "@mysten/sui": "2.27.1"
+  "peerDependencies": {
+    "@mysten/sui": "2.28.0"
   },
   "devDependencies": {
+    "@mysten/sui": "2.28.0",
     "@types/bun": "1.4.0",
     "@types/node": "24.13.3",
     "typescript": "5.9.3"

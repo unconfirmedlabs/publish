@@ -1,6 +1,6 @@
 import type { Network } from './config.js'
 import { PublishError } from './errors.js'
-import type { CliOptions } from './types.js'
+import type { CliOptions } from './cli-types.js'
 
 export const VERSION = '0.1.0'
 
