@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { access, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { access, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Network } from './config.js'
@@ -152,6 +152,37 @@ active_address: null
 `
 }
 
+async function builtModuleNames(packagePath: string, moduleCount: number): Promise<string[]> {
+  const manifest = await readFile(join(packagePath, 'Move.toml'), 'utf8')
+  const header = /^\s*\[package\]\s*$/m.exec(manifest)
+  if (!header) {
+    throw new PublishError('INVALID_PACKAGE_NAME', 'Move.toml must contain a valid [package] name.')
+  }
+  const sectionStart = header.index + header[0].length
+  const tail = manifest.slice(sectionStart)
+  const nextHeader = /^\s*\[[^\]]+\]\s*$/m.exec(tail)
+  const packageSection = tail.slice(0, nextHeader?.index ?? tail.length)
+  const packageName = packageSection.match(/^\s*name\s*=\s*["']([A-Za-z][A-Za-z0-9_]*)["']/m)?.[1]
+  if (!packageName) {
+    throw new PublishError('INVALID_PACKAGE_NAME', 'Move.toml must contain a valid [package] name.')
+  }
+  const entries = await readdir(join(packagePath, 'build', packageName, 'bytecode_modules'), {
+    withFileTypes: true,
+  })
+  const names = entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.mv'))
+    .map((entry) => entry.name.slice(0, -3))
+    .sort()
+  if (names.length !== moduleCount || new Set(names).size !== names.length) {
+    throw new PublishError(
+      'INVALID_BUILT_MODULES',
+      'Compiled module names do not match the bytecode artifact.',
+      { details: `${packagePath}: expected ${moduleCount}, found ${names.length}` },
+    )
+  }
+  return names
+}
+
 export async function buildMovePackage(options: {
   packagePath: string
   network: Network
@@ -161,6 +192,7 @@ export async function buildMovePackage(options: {
 }): Promise<{
   packagePath: string
   artifact: MoveBuildArtifact
+  moduleNames: string[]
   suiCliVersion: string
   diagnostics: string
 }> {
@@ -216,9 +248,11 @@ export async function buildMovePackage(options: {
       { cwd: packagePath, ...(options.signal ? { signal: options.signal } : {}) },
     )
 
+    const artifact = parseBuildOutput(result.stdout)
     return {
       packagePath,
-      artifact: parseBuildOutput(result.stdout),
+      artifact,
+      moduleNames: await builtModuleNames(packagePath, artifact.modules.length),
       suiCliVersion,
       diagnostics: sanitizeDiagnostic(result.stderr),
     }

@@ -29,6 +29,50 @@ export type PublishPackageOptions = PublishOptions & {
   signal?: AbortSignal
 }
 
+export type PublishBatchPackageOptions = {
+  packagePath: string
+  artifact: MoveBuildArtifact
+  moduleNames: string[]
+  suiCliVersion: string
+}
+
+export type PublishPackagesOptions = PublishOptions & {
+  packages: PublishBatchPackageOptions[]
+  signal?: AbortSignal
+}
+
+export type PublishBatchPackageReceipt = {
+  packagePath: string
+  packageDigest: string
+  moduleCount: number
+  moduleNames: string[]
+  dependencyCount: number
+  packageId?: string
+  publishedFile?: string
+  publishedFileUpdated?: boolean
+  warnings?: string[]
+}
+
+export type PublishBatchReceipt = {
+  schemaVersion: 1
+  operation: 'publish-batch'
+  outcome: 'validated' | 'published'
+  effect: MutationEffect
+  network: Network
+  packages: PublishBatchPackageReceipt[]
+  sender: string
+  sponsor: string
+  immutable: true
+  onaraUrl: string
+  rpcUrl: string
+  suiCliVersion: string
+  gasBudget: string | null
+  policy?: string
+  transactionDigest?: string
+  packageIds?: string[]
+  warnings?: string[]
+}
+
 export type PublishReceipt = {
   schemaVersion: 1
   operation: 'publish'
@@ -45,6 +89,7 @@ export type PublishReceipt = {
   onaraUrl: string
   rpcUrl: string
   suiCliVersion: string
+  gasBudget: string | null
   policy?: string
   transactionDigest?: string
   packageId?: string

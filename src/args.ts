@@ -2,17 +2,18 @@ import type { Network } from './config.js'
 import { PublishError } from './errors.js'
 import type { CliOptions } from './cli-types.js'
 
-export const VERSION = '0.1.0'
+export const VERSION = '0.2.0'
 
 export const HELP = `Publish a Sui Move package immutably with an ephemeral signer and Onara-sponsored gas.
 
 Usage:
-  publish [PACKAGE_PATH] --network <testnet|mainnet> --onara-url <url> [options]
+  publish [PACKAGE_PATH ...] --network <testnet|mainnet> --onara-url <url> [options]
   publish status <TRANSACTION_DIGEST> --network <testnet|mainnet> --onara-url <url> [options]
 
 The publish operation runs the stock Sui compiler, publishes the resulting modules,
 and consumes the returned UpgradeCap with 0x2::package::make_immutable in one atomic
-transaction. PACKAGE_PATH defaults to the current directory.
+transaction. One through five package paths are accepted; a missing path defaults
+to the current directory. A multi-package publish is one atomic transaction.
 
 Publish options:
   --network <network>   Required. Either testnet or mainnet.
@@ -177,13 +178,13 @@ export function parseArgs(argv: string[]): CliOptions {
     }
   }
 
-  if (flags.positionals.length > 1) usageError('Publish accepts at most one package path.')
+  if (flags.positionals.length > 5) usageError('Publish accepts at most five package paths.')
   if (flags.dryRun && flags.confirm) usageError('--yes is not used with --dry-run.')
 
   return {
     operation: 'publish',
     network: flags.network,
-    packagePath: flags.positionals[0] ?? '.',
+    packagePaths: flags.positionals.length > 0 ? flags.positionals : ['.'],
     dryRun: flags.dryRun,
     confirm: flags.confirm,
     suiBinary: flags.suiBinary,

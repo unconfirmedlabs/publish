@@ -6,6 +6,7 @@ export {
   createBoundedFetch,
   packageDigestHex,
   publishPackage,
+  publishPackages,
   sponsorshipError,
   transactionStatus,
 } from './workflow.js'
@@ -25,6 +26,10 @@ export type {
   PublishConnectionOptions,
   PublishOptions,
   PublishPackageOptions,
+  PublishBatchPackageOptions,
+  PublishBatchPackageReceipt,
+  PublishBatchReceipt,
+  PublishPackagesOptions,
   PublishReceipt,
   StatusOptions,
   StatusReceipt,

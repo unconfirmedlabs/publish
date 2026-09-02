@@ -2,7 +2,7 @@
 
 import { HELP, VERSION, parseArgs } from './args.js'
 import { errorFromUnknown, type PublishError } from './errors.js'
-import type { PublishReceipt, StatusReceipt } from './types.js'
+import type { PublishBatchReceipt, PublishReceipt, StatusReceipt } from './types.js'
 import type { CliOptions } from './cli-types.js'
 
 function write(stream: NodeJS.WriteStream, value: string): void {
@@ -16,7 +16,7 @@ function progress(json: boolean, quiet: boolean, event: string, message: string,
   } else write(process.stderr, message)
 }
 
-function renderReceipt(receipt: PublishReceipt | StatusReceipt, json: boolean): void {
+function renderReceipt(receipt: PublishBatchReceipt | PublishReceipt | StatusReceipt, json: boolean): void {
   if (json) {
     write(process.stdout, JSON.stringify(receipt))
     return
@@ -30,6 +30,19 @@ function renderReceipt(receipt: PublishReceipt | StatusReceipt, json: boolean): 
     write(process.stdout, `Transaction: ${receipt.digest}`)
     write(process.stdout, `Outcome: ${receipt.outcome}`)
     if (receipt.packageId) write(process.stdout, `Package: ${receipt.packageId}`)
+    return
+  }
+
+  if (receipt.operation === 'publish-batch') {
+    const verb = receipt.outcome === 'validated' ? 'Validated' : 'Published'
+    write(process.stdout, `${verb} ${receipt.packages.length} immutable packages on ${receipt.network}.`)
+    if (receipt.transactionDigest) write(process.stdout, `Transaction: ${receipt.transactionDigest}`)
+    for (const pkg of receipt.packages) {
+      write(process.stdout, `${pkg.packagePath}: ${pkg.packageId ?? pkg.packageDigest}`)
+      if (pkg.publishedFileUpdated && pkg.publishedFile) write(process.stdout, `Updated: ${pkg.publishedFile}`)
+      for (const warning of pkg.warnings ?? []) write(process.stderr, `warning: ${warning}`)
+    }
+    for (const warning of receipt.warnings ?? []) write(process.stderr, `warning: ${warning}`)
     return
   }
 
@@ -133,60 +146,75 @@ async function main(): Promise<number> {
         )
       }
 
-      const { publishPackage } = await import('./workflow.js')
+      const { publishPackages } = await import('./workflow.js')
       const { buildMovePackage } = await import('./move-build.js')
       const configModule = await import('./config.js')
       const config = configModule.resolveNetworkConfig(options.network, {
         ...(options.rpcUrl ? { rpcUrl: options.rpcUrl } : {}),
         onaraUrl: options.onaraUrl,
       })
-      progress(options.json, options.quiet, 'build', `Building ${options.packagePath} for ${options.network}...`)
-      const build = await buildMovePackage({
-        packagePath: options.packagePath,
-        network: options.network,
-        rpcUrl: config.rpcUrl,
-        suiBinary: options.suiBinary,
-        signal: abort.signal,
-      })
-      if (build.diagnostics) progress(options.json, options.quiet, 'compiler', build.diagnostics)
+      const builds = []
+      for (const packagePath of options.packagePaths) {
+        progress(options.json, options.quiet, 'build', `Building ${packagePath} for ${options.network}...`)
+        const build = await buildMovePackage({
+          packagePath,
+          network: options.network,
+          rpcUrl: config.rpcUrl,
+          suiBinary: options.suiBinary,
+          signal: abort.signal,
+        })
+        builds.push(build)
+        if (build.diagnostics) progress(options.json, options.quiet, 'compiler', build.diagnostics)
+      }
       progress(
         options.json,
         options.quiet,
         'sponsor',
         options.dryRun ? 'Validating sponsorship policy...' : 'Submitting sponsored transaction...',
       )
-      const receipt = await publishPackage({
+      const receipt = await publishPackages({
         network: options.network,
         ...(options.rpcUrl ? { rpcUrl: options.rpcUrl } : {}),
         onaraUrl: options.onaraUrl,
         timeoutMs: options.timeoutMs,
         dryRun: options.dryRun,
-        packagePath: build.packagePath,
-        artifact: build.artifact,
-        suiCliVersion: build.suiCliVersion,
+        packages: builds.map((build) => ({
+          packagePath: build.packagePath,
+          artifact: build.artifact,
+          moduleNames: build.moduleNames,
+          suiCliVersion: build.suiCliVersion,
+        })),
         signal: abort.signal,
       })
       if (receipt.outcome === 'published') {
-        if (options.writePublished && receipt.packageId) {
+        if (options.writePublished) {
+          const { updatePublishedFile } = await import('./published-file.js')
+          for (const [index, pkg] of receipt.packages.entries()) {
+            const build = builds[index]!
+            if (!pkg.packageId) {
+              pkg.publishedFileUpdated = false
+              pkg.warnings = [...(pkg.warnings ?? []), 'Package ID is missing; Published.toml was not updated.']
+              continue
+            }
           try {
-            const { updatePublishedFile } = await import('./published-file.js')
-            receipt.publishedFile = await updatePublishedFile({
+            pkg.publishedFile = await updatePublishedFile({
               packagePath: build.packagePath,
               network: options.network,
               chainId: config.chainId,
-              packageId: receipt.packageId,
+              packageId: pkg.packageId,
               suiCliVersion: build.suiCliVersion,
             })
-            receipt.publishedFileUpdated = true
+            pkg.publishedFileUpdated = true
           } catch (error) {
-            receipt.publishedFileUpdated = false
-            receipt.warnings = [
-              ...(receipt.warnings ?? []),
+            pkg.publishedFileUpdated = false
+            pkg.warnings = [
+              ...(pkg.warnings ?? []),
               `Package was published, but Published.toml was not updated: ${error instanceof Error ? error.message : 'unknown error'}`,
             ]
           }
-        } else if (!options.writePublished) {
-          receipt.publishedFileUpdated = false
+          }
+        } else {
+          for (const pkg of receipt.packages) pkg.publishedFileUpdated = false
         }
       }
       renderReceipt(receipt, options.json)

@@ -6,7 +6,7 @@ describe('parseArgs', () => {
   test('parses the minimal testnet publish contract', () => {
     expect(parseArgs(['.', '--network', 'testnet', '--onara-url', 'https://onara.example'])).toEqual({
       operation: 'publish',
-      packagePath: '.',
+      packagePaths: ['.'],
       network: 'testnet',
       dryRun: false,
       confirm: false,
@@ -33,7 +33,7 @@ describe('parseArgs', () => {
       ]),
     ).toMatchObject({
       operation: 'publish',
-      packagePath: '/move/pkg',
+      packagePaths: ['/move/pkg'],
       network: 'mainnet',
       dryRun: true,
       writePublished: false,
@@ -70,7 +70,7 @@ describe('parseArgs', () => {
     [[], '--network is required.'],
     [['--network', 'devnet'], '--network must be either'],
     [['--network', 'testnet'], '--onara-url is required.'],
-    [['.', 'other', '--network', 'testnet', '--onara-url', 'https://onara.example'], 'at most one package path'],
+    [['a', 'b', 'c', 'd', 'e', 'f', '--network', 'testnet', '--onara-url', 'https://onara.example'], 'at most five package paths'],
     [['--network', 'testnet', '--onara-url', 'https://onara.example', '--dry-run', '--yes'], '--yes is not used'],
     [['status', 'x', '--network', 'testnet', '--onara-url', 'https://onara.example', '--rpc-url', 'https://rpc.example'], 'apply only'],
     [['status', 'not-a-digest', '--network', 'testnet', '--onara-url', 'https://onara.example'], 'base58 Sui transaction digest'],
@@ -84,6 +84,16 @@ describe('parseArgs', () => {
       expect(error).toBeInstanceOf(PublishError)
       expect((error as PublishError).exitCode).toBe(2)
     }
+  })
+
+  test('accepts up to five package paths as one atomic batch', () => {
+    const options = parseArgs([
+      'a', 'b', 'c', 'd', 'e',
+      '--network', 'testnet',
+      '--onara-url', 'https://onara.example',
+    ])
+    expect(options.operation).toBe('publish')
+    if (options.operation === 'publish') expect(options.packagePaths).toEqual(['a', 'b', 'c', 'd', 'e'])
   })
 
 })

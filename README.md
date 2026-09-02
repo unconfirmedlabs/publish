@@ -1,12 +1,13 @@
 # publish
 
 An SDK for composing immutable Sui Move package publishes, plus a thin CLI that
-publishes one package with a fresh in-memory signer and
+publishes one through five packages atomically with a fresh in-memory signer and
 [Onara](https://github.com/unconfirmedlabs/onara)-sponsored gas.
 
 ```sh
 publish . --network testnet --onara-url <URL> --dry-run
 publish . --network testnet --onara-url <URL>
+publish package-a package-b --network testnet --onara-url <URL>
 
 publish . --network mainnet --onara-url <URL> --dry-run
 publish . --network mainnet --onara-url <URL> --yes
@@ -52,8 +53,9 @@ The root export also provides:
 - `transactionStatus` and `sponsorshipError` for digest-based reconciliation;
 - `updatePublishedFile` and `updatePublishedText` for explicit, atomic deployment
   metadata updates; and
-- `publishPackage` as the one-package ephemeral-signer convenience workflow used
-  by the CLI.
+- `publishPackages` as the one-to-five-package ephemeral-signer batch workflow
+  used by the CLI, plus `publishPackage` for compatibility with one-package SDK
+  callers.
 
 The core publishing options contain network and execution inputs only. CLI
 presentation, confirmation, and metadata-write switches are intentionally not
@@ -91,10 +93,10 @@ selected RPC. It never uses an ambient Sui address or keystore. The compiler
 still uses the package's normal `Move.lock`, dependency cache, and `build/`
 directory.
 
-After a successful transaction, the selected network section in
+After a successful transaction, the selected network section in each package's
 `Published.toml` is updated atomically. Other networks and surrounding comments
-are preserved. The new record intentionally has no `upgrade-capability` field.
-Use `--no-write-published` for a read-only checkout.
+are preserved. New records intentionally have no `upgrade-capability` field.
+Use `--no-write-published` for read-only checkouts.
 
 ## Install
 

@@ -10,7 +10,7 @@ type CommonCliOptions = {
 
 export type CliPublishOptions = CommonCliOptions & {
   operation: 'publish'
-  packagePath: string
+  packagePaths: string[]
   dryRun: boolean
   confirm: boolean
   suiBinary: string
