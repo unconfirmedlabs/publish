@@ -1,6 +1,6 @@
 {
   "name": "@unconfirmed/publish",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Compose and publish immutable Sui Move packages, with an Onara-sponsored CLI.",
   "license": "MIT",
   "type": "module",
