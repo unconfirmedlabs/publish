@@ -10,12 +10,12 @@ const MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 export class OnaraHttpError extends Error {
   readonly status: number
   readonly digest: string | undefined
-  readonly txStatus: 'unconfirmed' | 'unknown' | undefined
+  readonly txStatus: 'unconfirmed' | 'unknown' | 'applied' | undefined
 
   constructor(
     message: string,
     status: number,
-    options: { digest?: string; txStatus?: 'unconfirmed' | 'unknown' } = {},
+    options: { digest?: string; txStatus?: 'unconfirmed' | 'unknown' | 'applied' } = {},
   ) {
     super(message)
     this.name = 'OnaraHttpError'
@@ -73,7 +73,12 @@ async function responseJson(response: Response): Promise<Record<string, unknown>
 }
 
 function errorFromResponse(response: Response, body: Record<string, unknown>): OnaraHttpError {
-  const status = body.status === 'unconfirmed' || body.status === 'unknown' ? body.status : undefined
+  const status =
+    body.status === 'unconfirmed' || body.status === 'unknown'
+      ? body.status
+      : body.outcome === 'applied'
+        ? 'applied'
+        : undefined
   return new OnaraHttpError(
     typeof body.error === 'string' ? body.error : `Onara request failed with HTTP ${response.status}.`,
     response.status,

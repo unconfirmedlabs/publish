@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { OnaraHttpClient, OnaraHttpError } from '../src/onara-client.js'
+import { sponsorshipError } from '../src/workflow.js'
 
 describe('OnaraHttpClient', () => {
   test('sends the signed transaction with explicit dry-run semantics', async () => {
@@ -62,5 +63,38 @@ describe('OnaraHttpClient', () => {
     })
 
     expect(client.status()).rejects.toThrow('exceeded the 8 MiB limit')
+  })
+
+  test('marks an applied onchain failure', async () => {
+    const client = new OnaraHttpClient({
+      url: 'http://onara.test',
+      fetch: (async () =>
+        Response.json(
+          { error: 'Move abort', digest: 'digest', outcome: 'applied', failure: {} },
+          { status: 502 },
+        )) as unknown as typeof fetch,
+    })
+
+    try {
+      await client.sponsor({
+        sender: '0x1',
+        txBytes: 'bytes',
+        txSignature: 'signature',
+        dryRun: false,
+        waitForExecution: true,
+      })
+      throw new Error('expected request to fail')
+    } catch (error) {
+      expect(error).toBeInstanceOf(OnaraHttpError)
+      expect(error).toMatchObject({ status: 502, digest: 'digest', txStatus: 'applied' })
+    }
+  })
+
+  test('reports an applied onchain failure as a known failure', () => {
+    const error = sponsorshipError(
+      new OnaraHttpError('Move abort', 502, { digest: 'digest', txStatus: 'applied' }),
+      'digest',
+    )
+    expect(error).toMatchObject({ code: 'TRANSACTION_FAILED', effect: 'applied', exitCode: 1, digest: 'digest' })
   })
 })

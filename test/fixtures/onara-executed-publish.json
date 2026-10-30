@@ -1,0 +1,64 @@
+{
+  "digest": "5rXVrsgu75jnVXT1oFWjC4JtqchZ9nTPgykhPohWd411",
+  "effects": {
+    "version": 2,
+    "status": {
+      "success": true
+    },
+    "gasUsed": {
+      "computationCost": "100000",
+      "storageCost": "11970000",
+      "storageRebate": "0",
+      "nonRefundableStorageFee": "0"
+    },
+    "transactionDigest": "5rXVrsgu75jnVXT1oFWjC4JtqchZ9nTPgykhPohWd411",
+    "gasObject": null,
+    "eventsDigest": null,
+    "dependencies": [
+      "Byks2LBG2cNGT9fmhYyDwh3d9oreBnf6sMuE9SzuQGdP",
+      "FzB9793r5XvxA6ZgReqQNU6fKikn7NA3uYsDB2qBsSph"
+    ],
+    "lamportVersion": "1",
+    "changedObjects": [
+      {
+        "objectId": "0x1c607057a878240a7e0b73d10feea67f235ba8b68bdb65a19cd90a980b84e07c",
+        "inputState": "DoesNotExist",
+        "inputVersion": null,
+        "inputDigest": null,
+        "inputOwner": null,
+        "outputState": "AccumulatorWriteV1",
+        "outputVersion": null,
+        "outputDigest": null,
+        "outputOwner": null,
+        "idOperation": "None"
+      },
+      {
+        "objectId": "0xe78e0aca82c949b270bce3c581484dc2528968bb53c0cc53fcab6b125b99ab39",
+        "inputState": "DoesNotExist",
+        "inputVersion": null,
+        "inputDigest": null,
+        "inputOwner": null,
+        "outputState": "PackageWrite",
+        "outputVersion": "1",
+        "outputDigest": "6jf6YS2cpSWp96AKcquJnKNEjz7FnA9NAQKGu9W29Bzf",
+        "outputOwner": null,
+        "idOperation": "Created"
+      }
+    ],
+    "unchangedConsensusObjects": [],
+    "auxiliaryDataDigest": null
+  },
+  "events": [],
+  "balanceChanges": [
+    {
+      "coinType": "0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI",
+      "address": "0x67b0d0726fb28fec53e25c97b6ae10cc5101111225d6e74a6ec18f58c6ce03b2",
+      "amount": "-12070000"
+    }
+  ],
+  "objectTypes": {
+    "0xe78e0aca82c949b270bce3c581484dc2528968bb53c0cc53fcab6b125b99ab39": "package"
+  },
+  "checkpoint": "339591048",
+  "timestampMs": 1793318631521
+}

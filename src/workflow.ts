@@ -42,6 +42,13 @@ export function sponsorshipError(
         cause: onaraError,
       })
     }
+    if (onaraError.txStatus === 'applied' && onaraError.digest) {
+      return new PublishError('TRANSACTION_FAILED', onaraError.message, {
+        effect: 'applied',
+        digest: onaraError.digest,
+        cause: onaraError,
+      })
+    }
     if (onaraError.txStatus === 'unknown' || onaraError.status >= 500 || onaraError.status === 0) {
       const knownDigest = onaraError.digest ?? digest
       return new PublishError('EXECUTION_UNKNOWN', onaraError.message, {
