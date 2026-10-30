@@ -93,6 +93,25 @@ export function extractExecutionResult(value: unknown): ExecutionExtraction {
     }
   }
 
+  // Onara's sui-effect receipt nests the execution status inside effects.
+  const effects = record(response.effects)
+  const digest = text(response.digest)
+  if (digest && effects && record(effects.status)) {
+    const effectsDigest = text(effects.transactionDigest)
+    if (effectsDigest && effectsDigest !== digest) return { kind: 'unknown', effect: 'unknown' }
+    return extractExecutionResult({ ...response, status: effects.status })
+  }
+
+  // Onara reports an applied onchain failure without effects.
+  if (digest && response.outcome === 'applied' && record(response.failure)) {
+    return {
+      kind: 'failed',
+      effect: 'applied',
+      digest,
+      ...(text(response.error) ? { error: text(response.error)! } : {}),
+    }
+  }
+
   return { kind: 'unknown', effect: 'unknown' }
 }
 
