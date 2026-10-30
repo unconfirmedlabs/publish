@@ -2,7 +2,7 @@ import type { Network } from './config.js'
 import { PublishError } from './errors.js'
 import type { CliOptions } from './cli-types.js'
 
-export const VERSION = '0.2.0'
+export const VERSION = '0.2.1'
 
 export const HELP = `Publish a Sui Move package immutably with an ephemeral signer and Onara-sponsored gas.
 
