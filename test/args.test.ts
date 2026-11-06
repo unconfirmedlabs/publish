@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test'
+import { normalizeSuiAddress } from '@mysten/sui/utils'
 import { parseArgs } from '../src/args.js'
 import { PublishError } from '../src/errors.js'
+
+const publish = ['--network', 'testnet', '--onara-url', 'https://onara.example']
 
 describe('parseArgs', () => {
   test('parses the minimal testnet publish contract', () => {
@@ -76,6 +79,17 @@ describe('parseArgs', () => {
     [['status', 'not-a-digest', '--network', 'testnet', '--onara-url', 'https://onara.example'], 'base58 Sui transaction digest'],
     [['--network', 'testnet', '--wat'], 'Unknown option'],
     [['--network', 'testnet', '--yes=false'], 'does not take a value'],
+    [[...publish, '--created-objects-recipient', 'beef'], '0x-prefixed hexadecimal Sui address'],
+    [[...publish, '--created-objects-recipient', '0x'], '0x-prefixed hexadecimal Sui address'],
+    [[...publish, '--created-objects-recipient', `0x${'1'.repeat(65)}`], '0x-prefixed hexadecimal Sui address'],
+    [[...publish, '--created-objects-recipient', '0xg1'], '0x-prefixed hexadecimal Sui address'],
+    [[...publish, '--created-objects-recipient', '0x0'], 'zero address'],
+    [[...publish, '--created-objects-recipient', `0x${'0'.repeat(64)}`], 'zero address'],
+    [[...publish, '--created-objects-recipient'], 'Missing value'],
+    [[...publish, '--created-objects-recipient=0x1', '--allow-lost-created-objects'], 'not used with --created-objects-recipient'],
+    [[...publish, '--allow-lost-created-objects=yes'], 'does not take a value'],
+    [['status', '4'.repeat(44), ...publish, '--created-objects-recipient', '0x1'], 'apply only'],
+    [['status', '4'.repeat(44), ...publish, '--allow-lost-created-objects'], 'apply only'],
   ])('rejects invalid invocation %#', (argv, message) => {
     expect(() => parseArgs(argv)).toThrow(message)
     try {
@@ -96,4 +110,21 @@ describe('parseArgs', () => {
     if (options.operation === 'publish') expect(options.packagePaths).toEqual(['a', 'b', 'c', 'd', 'e'])
   })
 
+  test('normalizes the created-objects recipient', () => {
+    for (const value of ['0xBEEF', '0xbeef', `0x${'0'.repeat(60)}BEEF`]) {
+      const options = parseArgs([...publish, '--created-objects-recipient', value])
+      expect(options).toMatchObject({ createdObjectsRecipient: normalizeSuiAddress('0xbeef') })
+    }
+    const inline = parseArgs([...publish, '--created-objects-recipient=0x1'])
+    expect(inline).toMatchObject({ createdObjectsRecipient: `0x${'0'.repeat(63)}1` })
+    expect(parseArgs(publish)).not.toHaveProperty('createdObjectsRecipient')
+  })
+
+  test('accepts the explicit lost-objects escape hatch', () => {
+    expect(parseArgs([...publish, '--allow-lost-created-objects'])).toMatchObject({
+      operation: 'publish',
+      allowLostCreatedObjects: true,
+    })
+    expect(parseArgs(publish)).not.toHaveProperty('allowLostCreatedObjects')
+  })
 })

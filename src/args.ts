@@ -22,6 +22,13 @@ Publish options:
   --yes                 Required for a mainnet submission. Never prompts.
   --sui <path>          Sui CLI executable (default: sui).
   --no-write-published  Do not update Published.toml after a successful publish.
+  --created-objects-recipient <address>
+                        Forward address-owned objects that package init functions
+                        create for the ephemeral sender (for example admin caps) to
+                        this address, in a second sponsored transaction.
+  --allow-lost-created-objects
+                        Publish even though created address-owned objects stay with
+                        the discarded ephemeral key. Not used with a recipient.
 
 Connection options:
   --rpc-url <url>       Override the selected network's Sui gRPC endpoint.
@@ -39,6 +46,7 @@ Exit status:
   1  Operational failure with a known applied/not-applied outcome.
   2  Invalid usage or missing mainnet confirmation.
   3  Mutation outcome is unknown; reconcile with "publish status" before retrying.
+  4  Published, but created objects were not forwarded; a recovery key file was kept.
 `
 
 type ParsedFlags = {
@@ -52,10 +60,19 @@ type ParsedFlags = {
   rpcUrl?: string
   onaraUrl?: string
   timeoutMs: number
+  createdObjectsRecipient?: string
+  allowLostCreatedObjects: boolean
   positionals: string[]
 }
 
-const VALUE_FLAGS = new Set(['--network', '--sui', '--rpc-url', '--onara-url', '--timeout-ms'])
+const VALUE_FLAGS = new Set([
+  '--network',
+  '--sui',
+  '--rpc-url',
+  '--onara-url',
+  '--timeout-ms',
+  '--created-objects-recipient',
+])
 
 function usageError(message: string): never {
   throw new PublishError('INVALID_USAGE', message, { exitCode: 2 })
@@ -80,6 +97,7 @@ function parseFlags(argv: string[]): ParsedFlags {
     suiBinary: 'sui',
     writePublished: true,
     timeoutMs: 70_000,
+    allowLostCreatedObjects: false,
     positionals: [],
   }
   let operandsOnly = false
@@ -111,6 +129,7 @@ function parseFlags(argv: string[]): ParsedFlags {
     else if (name === '--dry-run') parsed.dryRun = true
     else if (name === '--yes') parsed.confirm = true
     else if (name === '--no-write-published') parsed.writePublished = false
+    else if (name === '--allow-lost-created-objects') parsed.allowLostCreatedObjects = true
     else if (name === '--help' || name === '--version') {
       usageError(`${name} must be handled before argument parsing.`)
     } else if (VALUE_FLAGS.has(name)) {
@@ -124,6 +143,7 @@ function parseFlags(argv: string[]): ParsedFlags {
       } else if (name === '--sui') parsed.suiBinary = value
       else if (name === '--rpc-url') parsed.rpcUrl = validateUrl(name, value)
       else if (name === '--onara-url') parsed.onaraUrl = validateUrl(name, value)
+      else if (name === '--created-objects-recipient') parsed.createdObjectsRecipient = validateRecipient(value)
       else {
         const timeout = Number(value)
         if (!Number.isSafeInteger(timeout) || timeout < 1_000 || timeout > 300_000) {
@@ -152,14 +172,36 @@ function validateUrl(flag: string, value: string): string {
   return url.toString().replace(/\/$/, '')
 }
 
+function validateRecipient(value: string): string {
+  if (!/^0x[0-9a-fA-F]{1,64}$/.test(value)) {
+    usageError('--created-objects-recipient must be a 0x-prefixed hexadecimal Sui address.')
+  }
+  const address = `0x${value.slice(2).toLowerCase().padStart(64, '0')}`
+  if (/^0x0+$/.test(address)) {
+    usageError('--created-objects-recipient cannot be the zero address; objects sent there are lost.')
+  }
+  return address
+}
+
 export function parseArgs(argv: string[]): CliOptions {
   const flags = parseFlags(argv)
   if (!flags.network) usageError('--network is required.')
   if (!flags.onaraUrl) usageError('--onara-url is required.')
 
   if (flags.positionals[0] === 'status') {
-    if (flags.dryRun || flags.confirm || flags.suiBinary !== 'sui' || !flags.writePublished || flags.rpcUrl) {
-      usageError('--dry-run, --yes, --sui, --no-write-published, and --rpc-url apply only to publishing.')
+    if (
+      flags.dryRun ||
+      flags.confirm ||
+      flags.suiBinary !== 'sui' ||
+      !flags.writePublished ||
+      flags.rpcUrl ||
+      flags.createdObjectsRecipient ||
+      flags.allowLostCreatedObjects
+    ) {
+      usageError(
+        '--dry-run, --yes, --sui, --no-write-published, --rpc-url, --created-objects-recipient, ' +
+          'and --allow-lost-created-objects apply only to publishing.',
+      )
     }
     if (flags.positionals.length !== 2) {
       usageError('status requires exactly one transaction digest.')
@@ -180,6 +222,9 @@ export function parseArgs(argv: string[]): CliOptions {
 
   if (flags.positionals.length > 5) usageError('Publish accepts at most five package paths.')
   if (flags.dryRun && flags.confirm) usageError('--yes is not used with --dry-run.')
+  if (flags.createdObjectsRecipient && flags.allowLostCreatedObjects) {
+    usageError('--allow-lost-created-objects is not used with --created-objects-recipient.')
+  }
 
   return {
     operation: 'publish',
@@ -194,5 +239,7 @@ export function parseArgs(argv: string[]): CliOptions {
     timeoutMs: flags.timeoutMs,
     ...(flags.rpcUrl ? { rpcUrl: flags.rpcUrl } : {}),
     onaraUrl: flags.onaraUrl,
+    ...(flags.createdObjectsRecipient ? { createdObjectsRecipient: flags.createdObjectsRecipient } : {}),
+    ...(flags.allowLostCreatedObjects ? { allowLostCreatedObjects: true } : {}),
   }
 }

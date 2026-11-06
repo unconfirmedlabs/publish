@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 import { HELP, VERSION, parseArgs } from './args.js'
-import { errorFromUnknown, type PublishError } from './errors.js'
-import type { PublishBatchReceipt, PublishReceipt, StatusReceipt } from './types.js'
+import { createdObjectsNotForwardedError, errorDocument, objectCount } from './cli-output.js'
+import { PublishError, errorFromUnknown } from './errors.js'
+import type { CreatedObjectsReceipt, PublishBatchReceipt, PublishReceipt, StatusReceipt } from './types.js'
 import type { CliOptions } from './cli-types.js'
 
 function write(stream: NodeJS.WriteStream, value: string): void {
@@ -14,6 +15,33 @@ function progress(json: boolean, quiet: boolean, event: string, message: string,
   if (json) {
     write(process.stderr, JSON.stringify({ type: 'progress', event, message, ...(data === undefined ? {} : { data }) }))
   } else write(process.stderr, message)
+}
+
+function renderCreatedObjects(created: CreatedObjectsReceipt, outcome: 'validated' | 'published'): void {
+  const count = created.objects.length
+  if (count === 0) return
+  if (outcome === 'validated') {
+    if (created.recipient) {
+      write(process.stdout, `Would forward ${objectCount(count)} to ${created.recipient}:`)
+      for (const object of created.objects) write(process.stdout, `${object.type} (owner ${object.owner})`)
+    } else {
+      write(process.stderr, `warning: ${objectCount(count)} would stay with the discarded ephemeral key:`)
+      for (const object of created.objects) write(process.stderr, `${object.type} (owner ${object.owner})`)
+    }
+    return
+  }
+  if (created.forwarded) {
+    write(process.stdout, `Forwarded ${objectCount(count)} to ${created.recipient}.`)
+    if (created.transactionDigest) write(process.stdout, `Forwarding transaction: ${created.transactionDigest}`)
+    for (const object of created.objects) write(process.stdout, `${object.objectId} ${object.type}`)
+    return
+  }
+  if (!created.recipient) {
+    write(process.stderr, `warning: ${objectCount(count)} stayed with the discarded ephemeral key:`)
+    for (const object of created.objects) {
+      write(process.stderr, `${object.objectId ?? '-'} ${object.type} (owner ${object.owner})`)
+    }
+  }
 }
 
 function renderReceipt(receipt: PublishBatchReceipt | PublishReceipt | StatusReceipt, json: boolean): void {
@@ -42,6 +70,7 @@ function renderReceipt(receipt: PublishBatchReceipt | PublishReceipt | StatusRec
       if (pkg.publishedFileUpdated && pkg.publishedFile) write(process.stdout, `Updated: ${pkg.publishedFile}`)
       for (const warning of pkg.warnings ?? []) write(process.stderr, `warning: ${warning}`)
     }
+    if (receipt.createdObjects) renderCreatedObjects(receipt.createdObjects, receipt.outcome)
     for (const warning of receipt.warnings ?? []) write(process.stderr, `warning: ${warning}`)
     return
   }
@@ -77,17 +106,7 @@ function renderError(error: PublishError, json: boolean, recovery?: string): voi
   if (json) {
     write(
       process.stderr,
-      JSON.stringify({
-        type: 'error',
-        error: {
-          code: error.code,
-          message: error.message,
-          effect: error.effect,
-          ...(error.digest ? { digest: error.digest } : {}),
-          ...(recovery ? { recovery } : {}),
-          ...(error.details ? { details: error.details } : {}),
-        },
-      }),
+      JSON.stringify(errorDocument(error, recovery)),
     )
     return
   }
@@ -95,6 +114,9 @@ function renderError(error: PublishError, json: boolean, recovery?: string): voi
   write(process.stderr, `effect: ${error.effect}`)
   if (error.digest) write(process.stderr, `transaction: ${error.digest}`)
   if (error.details) write(process.stderr, error.details)
+  if (error.recoveryKeyFile && !error.details?.includes(error.recoveryKeyFile)) {
+    write(process.stderr, `recovery key file: ${error.recoveryKeyFile}`)
+  }
   if (recovery) write(process.stderr, `recovery: ${recovery}`)
 }
 
@@ -138,7 +160,6 @@ async function main(): Promise<number> {
       }
 
       if (options.network === 'mainnet' && !options.dryRun && !options.confirm) {
-        const { PublishError } = await import('./errors.js')
         throw new PublishError(
           'CONFIRMATION_REQUIRED',
           'Mainnet publishing is permanent. Re-run with --yes after reviewing a --dry-run.',
@@ -185,6 +206,8 @@ async function main(): Promise<number> {
           suiCliVersion: build.suiCliVersion,
         })),
         signal: abort.signal,
+        ...(options.createdObjectsRecipient ? { createdObjectsRecipient: options.createdObjectsRecipient } : {}),
+        ...(options.allowLostCreatedObjects ? { allowLostCreatedObjects: true } : {}),
       })
       if (receipt.outcome === 'published') {
         if (options.writePublished) {
@@ -218,6 +241,12 @@ async function main(): Promise<number> {
         }
       }
       renderReceipt(receipt, options.json)
+      const created = receipt.createdObjects
+      if (created && !created.forwarded && created.recoveryKeyFile) {
+        const error = createdObjectsNotForwardedError(receipt, { ...created, recoveryKeyFile: created.recoveryKeyFile })
+        renderError(error, options.json)
+        return error.exitCode
+      }
       return 0
     } finally {
       removeSignalListener('SIGINT', interrupt)

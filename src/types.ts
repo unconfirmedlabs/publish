@@ -39,6 +39,27 @@ export type PublishBatchPackageOptions = {
 export type PublishPackagesOptions = PublishOptions & {
   packages: PublishBatchPackageOptions[]
   signal?: AbortSignal
+  /** Forward address-owned objects created for the ephemeral sender to this address. */
+  createdObjectsRecipient?: string
+  /** Publish even though created address-owned objects stay with the discarded key. */
+  allowLostCreatedObjects?: boolean
+  /** Directory for the forwarding recovery key file (default: process.cwd()). */
+  recoveryKeyDirectory?: string
+}
+
+export type CreatedObjectReceipt = {
+  objectId?: string
+  type: string
+  owner: string
+}
+
+export type CreatedObjectsReceipt = {
+  recipient: string | null
+  forwarded: boolean
+  objects: CreatedObjectReceipt[]
+  transactionDigest?: string
+  recoveryKeyFile?: string
+  error?: string
 }
 
 export type PublishBatchPackageReceipt = {
@@ -70,6 +91,7 @@ export type PublishBatchReceipt = {
   policy?: string
   transactionDigest?: string
   packageIds?: string[]
+  createdObjects?: CreatedObjectsReceipt
   warnings?: string[]
 }
 
