@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
 import { Transaction } from '@mysten/sui/transactions'
-import { normalizeSuiAddress } from '@mysten/sui/utils'
+import { normalizeStructTag, normalizeSuiAddress } from '@mysten/sui/utils'
 import { resolveNetworkConfig } from '../src/config.js'
 import { PublishError } from '../src/errors.js'
 import { OnaraHttpError } from '../src/onara-client.js'
@@ -19,9 +19,11 @@ const CAP_ID = normalizeSuiAddress('0xc1')
 const TICKET_ID = normalizeSuiAddress('0xc2')
 const ADMIN_CAP = `${PACKAGE_ID}::caps::AdminCap`
 const TICKET = `${PACKAGE_ID}::caps::Ticket`
+const PAIR = `${PACKAGE_ID}::caps::Pair<u8, u64>`
+const PAIR_ID = normalizeSuiAddress('0xc3')
 const OBJECT_DIGEST = '6jf6YS2cpSWp96AKcquJnKNEjz7FnA9NAQKGu9W29Bzf'
 
-type Created = { objectId: string; type: string }
+type Created = { objectId: string; type?: string }
 
 function effectsFor(digest: string, sender: string, created: readonly Created[]) {
   return {
@@ -52,8 +54,19 @@ function effectsFor(digest: string, sender: string, created: readonly Created[])
 function objectTypesFor(created: readonly Created[]): Record<string, string> {
   return {
     [PACKAGE_ID]: 'package',
-    ...Object.fromEntries(created.map((object) => [object.objectId, object.type])),
+    ...Object.fromEntries(
+      created.flatMap((object) => (object.type === undefined ? [] : [[object.objectId, object.type]])),
+    ),
   }
+}
+
+type Commands = ReturnType<Transaction['getData']>['commands']
+
+// Onara's allow-all policy: every sponsored transaction needs a MoveCall, and no command may use the gas coin.
+function onaraPolicyError(commands: Commands): string | undefined {
+  if (!commands.some((command) => command.$kind === 'MoveCall')) return 'allow-all: must include at least one MoveCall.'
+  if (JSON.stringify(commands).includes('GasCoin')) return 'allow-all: commands must not use the gas coin.'
+  return undefined
 }
 
 function isPublish(bytes: Uint8Array | string): boolean {
@@ -63,6 +76,7 @@ function isPublish(bytes: Uint8Array | string): boolean {
 type Harness = {
   context: PublishContext
   sponsorCalls: { dryRun: boolean; publish: boolean; sender: string }[]
+  forwards: Commands[]
   waits: string[]
 }
 
@@ -75,6 +89,7 @@ function harness(options: {
 }): Harness {
   const created = options.created ?? []
   const sponsorCalls: Harness['sponsorCalls'] = []
+  const forwards: Commands[] = []
   const waits: string[] = []
   const client = {
     core: {
@@ -127,6 +142,10 @@ function harness(options: {
       const digest = await parsed.getDigest()
       const publish = isPublish(request.txBytes)
       sponsorCalls.push({ dryRun: request.dryRun, publish, sender: request.sender })
+      const { commands } = parsed.getData()
+      if (!publish) forwards.push(commands)
+      const denied = onaraPolicyError(commands)
+      if (denied) throw new OnaraHttpError(denied, 403)
       if (request.dryRun) return { digest, dryRun: true, policy: 'allow-all' }
       if (publish) {
         if (options.publishResponse) return options.publishResponse(digest, request.sender) as Record<string, unknown>
@@ -149,6 +168,7 @@ function harness(options: {
       config: resolveNetworkConfig('testnet', { onaraUrl: 'https://onara.test' }),
     },
     sponsorCalls,
+    forwards,
     waits,
   }
 }
@@ -194,6 +214,7 @@ async function expectPublishError(promise: Promise<unknown>): Promise<PublishErr
 
 const CAP: Created = { objectId: CAP_ID, type: ADMIN_CAP }
 const TICKET_OBJECT: Created = { objectId: TICKET_ID, type: TICKET }
+const PAIR_OBJECT: Created = { objectId: PAIR_ID, type: PAIR }
 
 describe('publishPackagesWithClients', () => {
   test('keeps the receipt unchanged when nothing owned is created', async () => {
@@ -300,6 +321,65 @@ describe('publishPackagesWithClients', () => {
     expect(receipt.createdObjects?.transactionDigest).not.toBe(receipt.transactionDigest)
     expect(receipt.createdObjects).not.toHaveProperty('recoveryKeyFile')
     expect(await readdir(directory)).toEqual([])
+  })
+
+  test('forwards with one public_transfer MoveCall per object and no gas coin', async () => {
+    const run = harness({ created: [CAP, PAIR_OBJECT] })
+    const receipt = await publishPackagesWithClients(run.context, options({ createdObjectsRecipient: RECIPIENT }))
+    expect(receipt.createdObjects?.forwarded).toBe(true)
+    expect(run.forwards).toHaveLength(1)
+    const commands = run.forwards[0]!
+    expect(commands.map((command) => command.$kind)).toEqual(['MoveCall', 'MoveCall'])
+    expect(commands.some((command) => command.$kind === 'TransferObjects')).toBe(false)
+    expect(
+      commands.map((command) => {
+        const call = command.MoveCall!
+        return [call.package, call.module, call.function, call.typeArguments.map((type) => normalizeStructTag(type))]
+      }),
+    ).toEqual([
+      [normalizeSuiAddress('0x2'), 'transfer', 'public_transfer', [normalizeStructTag(ADMIN_CAP)]],
+      [normalizeSuiAddress('0x2'), 'transfer', 'public_transfer', [normalizeStructTag(PAIR)]],
+    ])
+    for (const command of commands) {
+      expect(command.MoveCall!.arguments.map((argument) => argument.$kind)).toEqual(['Input', 'Input'])
+    }
+    expect(commands[0]!.MoveCall!.arguments[1]).toEqual(commands[1]!.MoveCall!.arguments[1])
+    expect(JSON.stringify(commands)).not.toContain('GasCoin')
+    expect(onaraPolicyError(commands)).toBeUndefined()
+  })
+
+  test('the Onara-like policy rejects a bare TransferObjects forward', () => {
+    const transaction = new Transaction()
+    transaction.transferObjects([transaction.object(CAP_ID)], RECIPIENT)
+    expect(onaraPolicyError(transaction.getData().commands)).toBe('allow-all: must include at least one MoveCall.')
+  })
+
+  test('refuses objects without a known type before contacting Onara', async () => {
+    const run = harness({ created: [CAP, { objectId: PAIR_ID }] })
+    for (const dryRun of [false, true]) {
+      const error = await expectPublishError(
+        publishPackagesWithClients(run.context, options({ dryRun, createdObjectsRecipient: RECIPIENT })),
+      )
+      expect(error).toMatchObject({ code: 'CREATED_OBJECTS_TYPE_UNKNOWN', exitCode: 1, effect: 'not_applied' })
+      expect(error.message).toContain('1 created owned object has no known type')
+      expect(error.objects).toEqual([{ type: 'unknown', owner: expect.any(String) }])
+    }
+    expect(run.sponsorCalls).toHaveLength(0)
+    expect(await readdir(directory)).toEqual([])
+  })
+
+  test('falls back to the simulated type when the executed effects omit it', async () => {
+    const run = harness({
+      created: [CAP],
+      publishResponse: (digest, sender) => ({
+        digest,
+        effects: effectsFor(digest, sender, [CAP]),
+        objectTypes: objectTypesFor([{ objectId: CAP_ID }]),
+      }),
+    })
+    const receipt = await publishPackagesWithClients(run.context, options({ createdObjectsRecipient: RECIPIENT }))
+    expect(receipt.createdObjects).toMatchObject({ forwarded: true, objects: [{ objectId: CAP_ID, type: ADMIN_CAP }] })
+    expect(run.forwards[0]!.map((command) => command.MoveCall?.typeArguments)).toEqual([[ADMIN_CAP]])
   })
 
   test('keeps a 0600 recovery key when forwarding fails', async () => {

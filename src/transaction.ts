@@ -1,5 +1,6 @@
 import { Transaction } from '@mysten/sui/transactions'
 import { PublishError } from './errors.js'
+import { isKnownObjectType, type CreatedOwnedObject } from './created-objects.js'
 import type { MoveBuildArtifact } from './types.js'
 
 export const MAX_IMMUTABLE_PUBLISHES = 5
@@ -44,5 +45,42 @@ export function createImmutablePublishTransaction(
 
   const transaction = new Transaction()
   for (const artifact of artifacts) addImmutablePublish(transaction, artifact)
+  return transaction
+}
+
+/**
+ * Create a transaction that moves owned objects to `recipient` with one
+ * `0x2::transfer::public_transfer<T>` call per object. Sponsors that require a
+ * MoveCall accept it, and it never touches the gas coin. Every type must have
+ * `store`; an object whose type is unknown cannot be forwarded.
+ */
+export function createForwardingTransaction(
+  objects: readonly Pick<CreatedOwnedObject, 'objectId' | 'type' | 'version' | 'digest'>[],
+  recipient: string,
+): Transaction {
+  if (objects.length === 0) {
+    throw new PublishError('EMPTY_FORWARD', 'A forwarding transaction requires at least one object.')
+  }
+  const unknown = objects.filter((object) => !isKnownObjectType(object.type))
+  if (unknown.length > 0) {
+    throw new PublishError(
+      'CREATED_OBJECTS_TYPE_UNKNOWN',
+      'Created objects without a known type cannot be forwarded.',
+      { details: unknown.map((object) => `${object.objectId}: ${object.type}`).join('\n') },
+    )
+  }
+
+  const transaction = new Transaction()
+  const to = transaction.pure.address(recipient)
+  for (const object of objects) {
+    transaction.moveCall({
+      target: '0x2::transfer::public_transfer',
+      typeArguments: [object.type],
+      arguments: [
+        transaction.objectRef({ objectId: object.objectId, version: object.version, digest: object.digest }),
+        to,
+      ],
+    })
+  }
   return transaction
 }
