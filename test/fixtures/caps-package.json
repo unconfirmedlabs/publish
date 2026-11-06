@@ -1,0 +1,46 @@
+{
+  "description": "Captured with sui 1.82.1: sui move build --dump-bytecode-as-base64 --build-env testnet",
+  "moveToml": "[package]\nname = \"caps\"\nedition = \"2024\"\n",
+  "source": "module caps::caps;\n\npublic struct AdminCap has key, store {\n    id: UID,\n}\n\npublic struct Ticket has key {\n    id: UID,\n}\n\npublic struct Pair<phantom T, U: copy + drop> has copy, drop, store {\n    value: U,\n}\n\nfun init(ctx: &mut TxContext) {\n    transfer::public_transfer(AdminCap { id: object::new(ctx) }, ctx.sender());\n    transfer::transfer(Ticket { id: object::new(ctx) }, ctx.sender());\n}\n",
+  "modules": [
+    "oRzrCwcAAAUJAQAIAggYAyAbBDsEBT8YB1dsCMMBQAqDAhIMlQIiAAUBCQEMAQ0AAAwAAAIIAAABBwIAAQMAAQQEAAMDAgAABwABAAEIAAIAAgoGAQEMAgwGAQEIAwsDBAACBQMHAQcIBAABCAMBBggEAQUBCAACCQAFAQgBCEFkbWluQ2FwBFBhaXIGVGlja2V0CVR4Q29udGV4dANVSUQEY2FwcwJpZARpbml0A25ldwZvYmplY3QPcHVibGljX3RyYW5zZmVyBnNlbmRlcgh0cmFuc2Zlcgp0eF9jb250ZXh0BXZhbHVlAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgACAQYIAwECAQYIAwICAQ4JAQAAAAABDwoAEQESAAoALhEEOAAKABEBEgELAC4RBDgBAgAA"
+  ],
+  "dependencies": [
+    "0x0000000000000000000000000000000000000000000000000000000000000001",
+    "0x0000000000000000000000000000000000000000000000000000000000000002"
+  ],
+  "digest": [
+    171,
+    182,
+    17,
+    92,
+    183,
+    255,
+    88,
+    1,
+    219,
+    24,
+    231,
+    97,
+    250,
+    249,
+    135,
+    1,
+    50,
+    63,
+    14,
+    190,
+    187,
+    200,
+    157,
+    209,
+    148,
+    237,
+    69,
+    205,
+    132,
+    5,
+    100,
+    88
+  ]
+}

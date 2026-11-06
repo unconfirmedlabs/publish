@@ -55,5 +55,26 @@ describe('built CLI non-TTY contract', () => {
     expect(result.exitCode).toBe(0)
     expect(result.stderr).toBe('')
     expect(result.stdout).toStartWith('Publish a Sui Move package immutably')
+    expect(result.stdout).toContain('--created-objects-recipient <address>')
+    expect(result.stdout).toContain('--allow-lost-created-objects')
+    expect(result.stdout).toContain('  4  Published, but created objects were not forwarded')
+  })
+
+  test('rejects the zero created-objects recipient locally', async () => {
+    const result = await runCli([
+      '--network',
+      'testnet',
+      '--onara-url',
+      'https://onara.invalid',
+      '--created-objects-recipient',
+      '0x0',
+      '--json',
+    ])
+    expect(result.exitCode).toBe(2)
+    expect(result.stdout).toBe('')
+    expect(JSON.parse(result.stderr)).toMatchObject({
+      type: 'error',
+      error: { code: 'INVALID_USAGE', effect: 'not_applied' },
+    })
   })
 })

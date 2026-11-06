@@ -16,6 +16,8 @@ export type CliPublishOptions = CommonCliOptions & {
   suiBinary: string
   writePublished: boolean
   rpcUrl?: string
+  createdObjectsRecipient?: string
+  allowLostCreatedObjects?: boolean
 }
 
 export type CliStatusOptions = CommonCliOptions & {

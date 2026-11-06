@@ -1,12 +1,24 @@
+import { chmod, rm, writeFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
+import type { ClientWithCoreApi } from '@mysten/sui/client'
 import { SuiGrpcClient } from '@mysten/sui/grpc'
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
-import { toBase64 } from '@mysten/sui/utils'
-import { resolveNetworkConfig } from './config.js'
+import { Transaction } from '@mysten/sui/transactions'
+import { isValidSuiAddress, normalizeSuiAddress, toBase64 } from '@mysten/sui/utils'
+import { resolveNetworkConfig, type NetworkConfig } from './config.js'
+import {
+  checkStoreAbilities,
+  selectCreatedOwnedObjects,
+  selectCreatedPackageIds,
+  type CreatedOwnedObject,
+} from './created-objects.js'
 import { PublishError } from './errors.js'
 import { OnaraHttpClient, OnaraHttpError } from './onara-client.js'
 import { extractExecutionResult } from './result.js'
 import { createImmutablePublishTransaction } from './transaction.js'
 import type {
+  CreatedObjectReceipt,
+  CreatedObjectsReceipt,
   PublishBatchPackageReceipt,
   PublishBatchReceipt,
   PublishPackageOptions,
@@ -15,6 +27,18 @@ import type {
   StatusOptions,
   StatusReceipt,
 } from './types.js'
+
+/** The Sui client surface used by the batch workflow. */
+export type PublishClient = ClientWithCoreApi & {
+  movePackageService: Pick<SuiGrpcClient['movePackageService'], 'getPackage' | 'getDatatype'>
+}
+
+export type PublishContext = {
+  client: PublishClient
+  onara: Pick<OnaraHttpClient, 'sponsor'>
+  sponsor: string
+  config: NetworkConfig
+}
 
 export function createBoundedFetch(timeoutMs: number): typeof fetch {
   return (async (input, init) => {
@@ -243,7 +267,7 @@ function moduleSetKey(moduleNames: readonly string[]): string {
 }
 
 async function mapPublishedPackageIds(options: {
-  client: SuiGrpcClient
+  client: Pick<PublishClient, 'movePackageService'>
   packageIds: readonly string[]
   packages: PublishPackagesOptions['packages']
   signal?: AbortSignal
@@ -293,7 +317,7 @@ async function mapPublishedPackageIds(options: {
   return mapped
 }
 
-export async function publishPackages(options: PublishPackagesOptions): Promise<PublishBatchReceipt> {
+function validateBatch(options: PublishPackagesOptions): void {
   if (options.packages.length < 1 || options.packages.length > 5) {
     throw new PublishError('INVALID_BATCH_SIZE', 'A publish operation must contain one through five packages.')
   }
@@ -312,6 +336,152 @@ export async function publishPackages(options: PublishPackagesOptions): Promise<
       'Every package in a batch must have a unique, non-empty compiled module-name set.',
     )
   }
+}
+
+function createdObjectsRecipient(options: PublishPackagesOptions): string | undefined {
+  if (options.createdObjectsRecipient === undefined) return undefined
+  const value = options.createdObjectsRecipient
+  const recipient = /^0x[0-9a-fA-F]{1,64}$/.test(value) ? normalizeSuiAddress(value) : undefined
+  if (!recipient || !isValidSuiAddress(recipient)) {
+    throw new PublishError('INVALID_CREATED_OBJECTS_RECIPIENT', 'The created-objects recipient must be a Sui address.', {
+      exitCode: 2,
+      details: value,
+    })
+  }
+  if (recipient === normalizeSuiAddress('0x0')) {
+    throw new PublishError(
+      'INVALID_CREATED_OBJECTS_RECIPIENT',
+      'The created-objects recipient cannot be the zero address; objects sent there are lost.',
+      { exitCode: 2 },
+    )
+  }
+  if (options.allowLostCreatedObjects) {
+    throw new PublishError(
+      'INVALID_USAGE',
+      'Allowing lost created objects cannot be combined with a created-objects recipient.',
+      { exitCode: 2 },
+    )
+  }
+  return recipient
+}
+
+function objectSummary(objects: readonly CreatedOwnedObject[]): string {
+  return objects.map((object) => `${object.type} (owner ${object.owner})`).join('\n')
+}
+
+function objectReceipts(objects: readonly CreatedOwnedObject[], withIds: boolean): CreatedObjectReceipt[] {
+  return objects.map((object) => ({
+    ...(withIds ? { objectId: object.objectId } : {}),
+    type: object.type,
+    owner: object.owner,
+  }))
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  if (error instanceof PublishError) return error.details ? `${error.message} ${error.details}` : error.message
+  return error instanceof Error && error.message ? error.message : fallback
+}
+
+function executedEffects(response: unknown): { effects: unknown; objectTypes: unknown } | undefined {
+  const root = typeof response === 'object' && response !== null ? (response as Record<string, unknown>) : undefined
+  const nested = root?.Transaction ?? root?.FailedTransaction
+  const transaction =
+    typeof nested === 'object' && nested !== null ? (nested as Record<string, unknown>) : root
+  if (!transaction?.effects || !transaction.objectTypes) return undefined
+  return { effects: transaction.effects, objectTypes: transaction.objectTypes }
+}
+
+export function recoveryKeyFileName(sender: string): string {
+  return `publish-recovery-${normalizeSuiAddress(sender)}.key`
+}
+
+async function writeRecoveryKey(directory: string, sender: string, signer: Ed25519Keypair): Promise<string> {
+  const path = resolve(directory, recoveryKeyFileName(sender))
+  let created = false
+  try {
+    await writeFile(path, `${signer.getSecretKey()}\n`, { flag: 'wx', mode: 0o600 })
+    created = true
+    await chmod(path, 0o600)
+    return path
+  } catch (error) {
+    if (created) await rm(path, { force: true }).catch(() => undefined)
+    throw new PublishError('RECOVERY_KEY_WRITE_FAILED', 'Unable to write the created-objects recovery key file.', {
+      details: `${path}: ${error instanceof Error ? error.message : 'unknown error'}`,
+      cause: error,
+    })
+  }
+}
+
+async function removeRecoveryKey(path: string): Promise<boolean> {
+  try {
+    await rm(path, { force: true })
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function forwardCreatedObjects(options: {
+  context: PublishContext
+  signer: Ed25519Keypair
+  sender: string
+  recipient: string
+  objects: readonly CreatedOwnedObject[]
+  signal?: AbortSignal
+}): Promise<{ digest: string } | { error: string; digest?: string }> {
+  const { client, onara, sponsor } = options.context
+  const transaction = new Transaction()
+  transaction.transferObjects(
+    options.objects.map((object) =>
+      transaction.objectRef({ objectId: object.objectId, version: object.version, digest: object.digest }),
+    ),
+    options.recipient,
+  )
+  transaction.setSender(options.sender)
+  transaction.setGasOwner(sponsor)
+  transaction.setGasPayment([])
+
+  let bytes: Uint8Array
+  let digest: string
+  try {
+    bytes = await transaction.build({ client })
+    digest = await transaction.getDigest()
+  } catch (error) {
+    return { error: `Unable to build the forwarding transaction: ${errorMessage(error, 'unknown error')}` }
+  }
+
+  let response: unknown
+  try {
+    const { signature } = await options.signer.signTransaction(bytes)
+    response = await onara.sponsor({
+      sender: options.sender,
+      txBytes: toBase64(bytes),
+      txSignature: signature,
+      dryRun: false,
+      waitForExecution: true,
+    })
+  } catch (error) {
+    const failure = sponsorshipError(error, digest)
+    return {
+      error: `Forwarding transaction was not confirmed: ${failure.message}`,
+      ...(failure.effect === 'not_applied' ? {} : { digest: failure.digest ?? digest }),
+    }
+  }
+
+  const execution = extractExecutionResult(response)
+  if (execution.kind === 'success') return { digest: execution.digest ?? digest }
+  if (execution.kind === 'failed') {
+    return {
+      error: `Forwarding transaction failed onchain: ${execution.error ?? 'unknown error'}`,
+      digest: execution.digest ?? digest,
+    }
+  }
+  return { error: 'Onara returned an unrecognized forwarding response.', digest }
+}
+
+export async function publishPackages(options: PublishPackagesOptions): Promise<PublishBatchReceipt> {
+  validateBatch(options)
+  createdObjectsRecipient(options)
 
   const config = resolveNetworkConfig(options.network, {
     ...(options.rpcUrl ? { rpcUrl: options.rpcUrl } : {}),
@@ -329,6 +499,20 @@ export async function publishPackages(options: PublishPackagesOptions): Promise<
     chainId: config.chainId,
     ...(options.signal ? { signal: options.signal } : {}),
   })
+  return publishPackagesWithClients({ client, onara, sponsor, config }, options)
+}
+
+/**
+ * The batch publish workflow after endpoint construction and identity checks.
+ * Exposed so callers and tests can inject a client and an Onara sponsor.
+ */
+export async function publishPackagesWithClients(
+  context: PublishContext,
+  options: PublishPackagesOptions,
+): Promise<PublishBatchReceipt> {
+  validateBatch(options)
+  const recipient = createdObjectsRecipient(options)
+  const { client, onara, sponsor, config } = context
 
   const signer = new Ed25519Keypair()
   const sender = signer.toSuiAddress()
@@ -353,18 +537,51 @@ export async function publishPackages(options: PublishPackagesOptions): Promise<
     })
   }
 
-  const { signature } = await signer.signTransaction(bytes)
-  let response: unknown
+  let simulatedEffects: unknown
+  let simulatedTypes: unknown
   try {
-    response = await onara.sponsor({
-      sender,
-      txBytes: toBase64(bytes),
-      txSignature: signature,
-      dryRun: options.dryRun,
-      waitForExecution: true,
+    const simulation = await client.core.simulateTransaction({
+      transaction: bytes,
+      include: { effects: true, objectTypes: true },
+      ...(options.signal ? { signal: options.signal } : {}),
     })
+    if (simulation.$kind !== 'Transaction') {
+      throw new Error(simulation.FailedTransaction.status.error?.message ?? 'Simulation failed.')
+    }
+    simulatedEffects = simulation.Transaction.effects
+    simulatedTypes = simulation.Transaction.objectTypes
   } catch (error) {
-    throw sponsorshipError(error, digest)
+    throw new PublishError('TRANSACTION_BUILD_FAILED', 'Unable to simulate the publish batch.', {
+      ...(error instanceof Error ? { details: error.message } : {}),
+      cause: error,
+    })
+  }
+
+  const stranded = selectCreatedOwnedObjects(simulatedEffects, simulatedTypes, sender)
+  if (stranded.length > 0 && !recipient && !options.allowLostCreatedObjects) {
+    throw new PublishError(
+      'CREATED_OBJECTS_RECIPIENT_REQUIRED',
+      `The publish would leave ${stranded.length} owned object${stranded.length === 1 ? '' : 's'} with the ephemeral signer. ` +
+        'Pass --created-objects-recipient <address> (or --allow-lost-created-objects to discard them).',
+      { exitCode: 2, details: objectSummary(stranded), objects: objectReceipts(stranded, false) },
+    )
+  }
+  if (stranded.length > 0 && recipient) {
+    const abilities = await checkStoreAbilities({
+      types: stranded.map((object) => object.type),
+      createdPackageIds: selectCreatedPackageIds(simulatedEffects),
+      modules: options.packages.flatMap((pkg) => pkg.artifact.modules),
+      lookup: client.movePackageService,
+      ...(options.signal ? { signal: options.signal } : {}),
+    })
+    const blocked = stranded.filter((object) => abilities.get(object.type) === 'no_store')
+    if (blocked.length > 0) {
+      throw new PublishError(
+        'CREATED_OBJECTS_NOT_TRANSFERABLE',
+        `${blocked.length} created owned object${blocked.length === 1 ? ' has' : 's have'} a type without store and cannot be forwarded.`,
+        { details: objectSummary(blocked), objects: objectReceipts(blocked, false) },
+      )
+    }
   }
 
   const packages: PublishBatchPackageReceipt[] = options.packages.map((pkg) => ({
@@ -388,13 +605,29 @@ export async function publishPackages(options: PublishPackagesOptions): Promise<
     suiCliVersion: options.packages[0]!.suiCliVersion,
     gasBudget: data.gasData.budget === null ? null : String(data.gasData.budget),
   }
+  const reportsObjects = recipient !== undefined || stranded.length > 0
 
-  const responseRecord =
-    typeof response === 'object' && response !== null ? (response as Record<string, unknown>) : undefined
-  if (responseRecord?.dryRun === true) {
-    if (!options.dryRun) {
-      throw new PublishError('ONARA_DRY_RUN_ONLY', 'Onara validated the batch but did not execute it.', {
-        effect: 'not_applied',
+  const { signature } = await signer.signTransaction(bytes)
+  if (options.dryRun) {
+    let response: unknown
+    try {
+      response = await onara.sponsor({
+        sender,
+        txBytes: toBase64(bytes),
+        txSignature: signature,
+        dryRun: true,
+        waitForExecution: true,
+      })
+    } catch (error) {
+      throw sponsorshipError(error, digest)
+    }
+    const responseRecord =
+      typeof response === 'object' && response !== null ? (response as Record<string, unknown>) : undefined
+    if (responseRecord?.dryRun !== true) {
+      throw new PublishError('INVALID_ONARA_RESPONSE', 'Onara returned an executable result for a batch dry run.', {
+        effect: 'unknown',
+        exitCode: 3,
+        digest,
       })
     }
     return {
@@ -402,63 +635,171 @@ export async function publishPackages(options: PublishPackagesOptions): Promise<
       outcome: 'validated',
       effect: 'not_applied',
       ...(typeof responseRecord.policy === 'string' ? { policy: responseRecord.policy } : {}),
+      ...(reportsObjects
+        ? {
+            createdObjects: {
+              recipient: recipient ?? null,
+              forwarded: false,
+              objects: objectReceipts(stranded, false),
+            },
+          }
+        : {}),
     }
   }
-  if (options.dryRun) {
-    throw new PublishError('INVALID_ONARA_RESPONSE', 'Onara returned an executable result for a batch dry run.', {
-      effect: 'unknown',
-      exitCode: 3,
-      digest,
-    })
-  }
 
-  const execution = extractExecutionResult(response)
-  if (execution.kind === 'failed') {
-    throw new PublishError('TRANSACTION_FAILED', execution.error ?? 'Publish batch failed onchain.', {
-      effect: 'applied',
-      digest: execution.digest ?? digest,
-    })
-  }
-  if (execution.kind !== 'success') {
-    throw new PublishError('INVALID_ONARA_RESPONSE', 'Onara returned an unrecognized batch execution response.', {
-      effect: 'unknown',
-      exitCode: 3,
-      digest,
-    })
-  }
-  const packageIds = execution.packageIds ?? []
-  if (packageIds.length !== options.packages.length) {
-    throw new PublishError('BATCH_PACKAGE_COUNT_MISMATCH', 'The applied batch returned an unexpected package count.', {
-      effect: 'applied',
-      digest: execution.digest ?? digest,
-      details: `expected ${options.packages.length}, received ${packageIds.length}`,
-    })
-  }
+  let recoveryKeyFile =
+    recipient && stranded.length > 0
+      ? await writeRecoveryKey(options.recoveryKeyDirectory ?? process.cwd(), sender, signer)
+      : undefined
 
-  let mapped: Map<string, string>
   try {
-    mapped = await mapPublishedPackageIds({
-      client,
-      packageIds,
-      packages: options.packages,
-      ...(options.signal ? { signal: options.signal } : {}),
-    })
-  } catch (error) {
-    throw new PublishError('APPLIED_BATCH_MAPPING_FAILED', 'The batch applied, but package IDs could not be correlated.', {
-      effect: 'applied',
-      digest: execution.digest ?? digest,
-      ...(error instanceof Error ? { details: error.message } : {}),
-      cause: error,
-    })
-  }
+    let response: unknown
+    try {
+      response = await onara.sponsor({
+        sender,
+        txBytes: toBase64(bytes),
+        txSignature: signature,
+        dryRun: false,
+        waitForExecution: true,
+      })
+    } catch (error) {
+      throw sponsorshipError(error, digest)
+    }
 
-  return {
-    ...common,
-    outcome: 'published',
-    effect: 'applied',
-    transactionDigest: execution.digest ?? digest,
-    packageIds,
-    packages: packages.map((pkg) => ({ ...pkg, packageId: mapped.get(pkg.packagePath)! })),
+    const responseRecord =
+      typeof response === 'object' && response !== null ? (response as Record<string, unknown>) : undefined
+    if (responseRecord?.dryRun === true) {
+      throw new PublishError('ONARA_DRY_RUN_ONLY', 'Onara validated the batch but did not execute it.', {
+        effect: 'not_applied',
+      })
+    }
+
+    const execution = extractExecutionResult(response)
+    if (execution.kind === 'failed') {
+      throw new PublishError('TRANSACTION_FAILED', execution.error ?? 'Publish batch failed onchain.', {
+        effect: 'applied',
+        digest: execution.digest ?? digest,
+      })
+    }
+    if (execution.kind !== 'success') {
+      throw new PublishError('INVALID_ONARA_RESPONSE', 'Onara returned an unrecognized batch execution response.', {
+        effect: 'unknown',
+        exitCode: 3,
+        digest,
+      })
+    }
+    const transactionDigest = execution.digest ?? digest
+
+    let createdObjects: CreatedObjectsReceipt | undefined
+    if (recipient && recoveryKeyFile) {
+      const keyFile = recoveryKeyFile
+      let objects: CreatedOwnedObject[] = stranded
+      let failure: { error: string; digest?: string } | undefined
+      try {
+        const waited = await client.core.waitForTransaction({
+          digest: transactionDigest,
+          timeout: options.timeoutMs,
+          include: { effects: true, objectTypes: true },
+          ...(options.signal ? { signal: options.signal } : {}),
+        })
+        const executed = executedEffects(response) ?? executedEffects(waited)
+        if (!executed) throw new Error('Executed effects are unavailable.')
+        objects = selectCreatedOwnedObjects(executed.effects, executed.objectTypes, sender)
+      } catch (error) {
+        failure = { error: `Unable to read the executed publish effects: ${errorMessage(error, 'unknown error')}` }
+      }
+
+      if (!failure && objects.length === 0) {
+        await removeRecoveryKey(keyFile)
+        recoveryKeyFile = undefined
+        createdObjects = { recipient, forwarded: false, objects: [] }
+      } else {
+        const forwarded = failure ?? await forwardCreatedObjects({
+          context,
+          signer,
+          sender,
+          recipient,
+          objects,
+          ...(options.signal ? { signal: options.signal } : {}),
+        })
+        if ('error' in forwarded) {
+          createdObjects = {
+            recipient,
+            forwarded: false,
+            objects: objectReceipts(objects, true),
+            ...(forwarded.digest ? { transactionDigest: forwarded.digest } : {}),
+            recoveryKeyFile: keyFile,
+            error: forwarded.error,
+          }
+        } else {
+          const removed = await removeRecoveryKey(keyFile)
+          if (removed) recoveryKeyFile = undefined
+          createdObjects = {
+            recipient,
+            forwarded: true,
+            objects: objectReceipts(objects, true),
+            transactionDigest: forwarded.digest,
+            ...(removed ? {} : { recoveryKeyFile: keyFile }),
+          }
+        }
+      }
+    } else if (reportsObjects) {
+      const executed = executedEffects(response)
+      const objects = executed
+        ? selectCreatedOwnedObjects(executed.effects, executed.objectTypes, sender)
+        : stranded
+      createdObjects = { recipient: recipient ?? null, forwarded: false, objects: objectReceipts(objects, true) }
+    }
+
+    const packageIds = execution.packageIds ?? []
+    if (packageIds.length !== options.packages.length) {
+      throw new PublishError('BATCH_PACKAGE_COUNT_MISMATCH', 'The applied batch returned an unexpected package count.', {
+        effect: 'applied',
+        digest: transactionDigest,
+        details: `expected ${options.packages.length}, received ${packageIds.length}`,
+      })
+    }
+
+    let mapped: Map<string, string>
+    try {
+      mapped = await mapPublishedPackageIds({
+        client,
+        packageIds,
+        packages: options.packages,
+        ...(options.signal ? { signal: options.signal } : {}),
+      })
+    } catch (error) {
+      throw new PublishError('APPLIED_BATCH_MAPPING_FAILED', 'The batch applied, but package IDs could not be correlated.', {
+        effect: 'applied',
+        digest: transactionDigest,
+        ...(error instanceof Error ? { details: error.message } : {}),
+        cause: error,
+      })
+    }
+
+    return {
+      ...common,
+      outcome: 'published',
+      effect: 'applied',
+      transactionDigest,
+      packageIds,
+      packages: packages.map((pkg) => ({ ...pkg, packageId: mapped.get(pkg.packagePath)! })),
+      ...(createdObjects ? { createdObjects } : {}),
+    }
+  } catch (caught) {
+    if (!recoveryKeyFile || !(caught instanceof PublishError)) throw caught
+    const nothingCreated =
+      caught.effect === 'not_applied' || (caught.effect === 'applied' && caught.code === 'TRANSACTION_FAILED')
+    if (nothingCreated && await removeRecoveryKey(recoveryKeyFile)) throw caught
+    throw new PublishError(caught.code, caught.message, {
+      exitCode: caught.exitCode,
+      effect: caught.effect,
+      ...(caught.details ? { details: caught.details } : {}),
+      ...(caught.digest ? { digest: caught.digest } : {}),
+      recoveryKeyFile,
+      objects: objectReceipts(stranded, true),
+      cause: caught.cause,
+    })
   }
 }
 
