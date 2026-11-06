@@ -278,10 +278,14 @@ objects that would be owned by the ephemeral sender:
   object's declared type has `store`: from the batch's own bytecode for types it
   defines, or from the Sui RPC for dependency types. A type that lacks `store`
   is refused with `CREATED_OBJECTS_NOT_TRANSFERABLE` (exit `1`); there is no
-  override. A type that cannot be checked is allowed, and the forwarding
-  transaction itself is the final check. After the publish succeeds, the same
-  ephemeral key signs a `TransferObjects` transaction to the recipient, also
-  sponsored through Onara. The zero address is rejected.
+  override. An object whose type the simulation does not report is refused with
+  `CREATED_OBJECTS_TYPE_UNKNOWN` (exit `1`), because the forward must name the
+  type. A known type whose `store` ability cannot be checked is allowed, and
+  the forwarding transaction itself is the final check. After the publish
+  succeeds, the same ephemeral key signs a forwarding transaction with one
+  `0x2::transfer::public_transfer<T>` call per object, where `T` is the object's
+  full type, also sponsored through Onara. It never touches the gas coin. The
+  zero address is rejected.
 - With `--allow-lost-created-objects`, the publish goes ahead and the objects
   stay with the discarded key. The receipt lists them, with `recipient: null`.
   It cannot be combined with a recipient.

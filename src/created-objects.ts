@@ -100,6 +100,11 @@ function structParts(type: string): { address: string; module: string; name: str
   }
 }
 
+/** Whether `type` is a full struct type a forwarding `public_transfer<T>` call can name. */
+export function isKnownObjectType(type: string): boolean {
+  return structParts(type) !== undefined
+}
+
 /**
  * Determine from compiled modules whether `module::name` declares `store`.
  * Returns `unknown` when no module, or more than one module, declares the type,

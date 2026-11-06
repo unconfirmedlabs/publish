@@ -3,11 +3,11 @@ import { resolve } from 'node:path'
 import type { ClientWithCoreApi } from '@mysten/sui/client'
 import { SuiGrpcClient } from '@mysten/sui/grpc'
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
-import { Transaction } from '@mysten/sui/transactions'
 import { isValidSuiAddress, normalizeSuiAddress, toBase64 } from '@mysten/sui/utils'
 import { resolveNetworkConfig, type NetworkConfig } from './config.js'
 import {
   checkStoreAbilities,
+  isKnownObjectType,
   selectCreatedOwnedObjects,
   selectCreatedPackageIds,
   type CreatedOwnedObject,
@@ -15,7 +15,7 @@ import {
 import { PublishError } from './errors.js'
 import { OnaraHttpClient, OnaraHttpError } from './onara-client.js'
 import { extractExecutionResult } from './result.js'
-import { createImmutablePublishTransaction } from './transaction.js'
+import { createForwardingTransaction, createImmutablePublishTransaction } from './transaction.js'
 import type {
   CreatedObjectReceipt,
   CreatedObjectsReceipt,
@@ -430,20 +430,13 @@ async function forwardCreatedObjects(options: {
   signal?: AbortSignal
 }): Promise<{ digest: string } | { error: string; digest?: string }> {
   const { client, onara, sponsor } = options.context
-  const transaction = new Transaction()
-  transaction.transferObjects(
-    options.objects.map((object) =>
-      transaction.objectRef({ objectId: object.objectId, version: object.version, digest: object.digest }),
-    ),
-    options.recipient,
-  )
-  transaction.setSender(options.sender)
-  transaction.setGasOwner(sponsor)
-  transaction.setGasPayment([])
-
   let bytes: Uint8Array
   let digest: string
   try {
+    const transaction = createForwardingTransaction(options.objects, options.recipient)
+    transaction.setSender(options.sender)
+    transaction.setGasOwner(sponsor)
+    transaction.setGasPayment([])
     bytes = await transaction.build({ client })
     digest = await transaction.getDigest()
   } catch (error) {
@@ -567,6 +560,14 @@ export async function publishPackagesWithClients(
     )
   }
   if (stranded.length > 0 && recipient) {
+    const untyped = stranded.filter((object) => !isKnownObjectType(object.type))
+    if (untyped.length > 0) {
+      throw new PublishError(
+        'CREATED_OBJECTS_TYPE_UNKNOWN',
+        `${untyped.length} created owned object${untyped.length === 1 ? ' has' : 's have'} no known type and cannot be forwarded.`,
+        { details: objectSummary(untyped), objects: objectReceipts(untyped, false) },
+      )
+    }
     const abilities = await checkStoreAbilities({
       types: stranded.map((object) => object.type),
       createdPackageIds: selectCreatedPackageIds(simulatedEffects),
@@ -704,7 +705,12 @@ export async function publishPackagesWithClients(
         })
         const executed = executedEffects(response) ?? executedEffects(waited)
         if (!executed) throw new Error('Executed effects are unavailable.')
-        objects = selectCreatedOwnedObjects(executed.effects, executed.objectTypes, sender)
+        const simulatedType = new Map(stranded.map((object) => [object.objectId, object.type]))
+        objects = selectCreatedOwnedObjects(executed.effects, executed.objectTypes, sender).map((object) =>
+          isKnownObjectType(object.type)
+            ? object
+            : { ...object, type: simulatedType.get(object.objectId) ?? object.type },
+        )
       } catch (error) {
         failure = { error: `Unable to read the executed publish effects: ${errorMessage(error, 'unknown error')}` }
       }
